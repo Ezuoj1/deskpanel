@@ -215,6 +215,12 @@
         <div class="slots" id="slots"></div>
       </div>
 
+      <!-- 状态行放在手柄上面：这样抽屉箭头永远是整个控制台最底部那一条 -->
+      <footer class="ftr">
+        <span id="pos">x=0 y=0</span>
+        <span id="hint-esc">Esc / 点外部 收起</span>
+      </footer>
+
       <!-- 扩展坞：一条手柄 + 往下抽出来的扩展区（宽度与主区完全一致） -->
       <div class="dock" id="dock">
         <button class="dock-bar" id="dock-bar" title="展开 / 收起扩展区">
@@ -228,11 +234,6 @@
           <div class="dock-grid" id="dock-grid"></div>
         </div>
       </div>
-
-      <footer class="ftr">
-        <span id="pos">x=0 y=0</span>
-        <span id="hint-esc">Esc / 点外部 收起</span>
-      </footer>
     </div>
 
     <!-- 按钮绝对定位，悬浮不挤压布局 -->

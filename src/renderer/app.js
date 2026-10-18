@@ -952,9 +952,64 @@ if (KIND === 'panel') {
     persistSlots();
   }
 
-  function paintDock(open) {
+  // 抽屉动画（2026-10-18 定稿）：不逐帧改窗口高度，改成
+  //   展开：窗口一次性长到 434 →（玻璃还被 clip 剪着，画面不变）→ 去掉 clip，纯合成层滑出来；
+  //   收起：先 clip 剪回去 → 300ms 后把窗口缩回 302。
+  // 这样每一帧都不触发重排/重算 40px 模糊，实测帧间隔稳定。
+  const DOCK_MS = 300;
+  let dockTimer = 0;
+  const dockDebug = /(^|[?&])debug(=|&|$)/.test(location.search);
+
+  function dockSetHeight(h) {
+    if (API && API.setHeight) API.setHeight(h);
+  }
+
+  function dockLayout(open) {
+    const glass = document.querySelector('.glass');
+    if (open) {
+      // ① 先无过渡地把玻璃剪成 302（此时窗口还是 302，画面完全不变）
+      document.body.classList.add('no-clip-trans', 'dock-clipped');
+      void glass.offsetHeight;
+      document.body.classList.remove('no-clip-trans');
+      // ② 窗口一次性长到 434：多出来的 132px 还被剪着，屏幕上毫无变化
+      dockSetHeight(434);
+      // ③ 两帧之后去掉 clip → 纯粹的合成层动画，把扩展区“露”出来
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        document.body.classList.remove('dock-clipped');
+      }));
+    } else {
+      // ① 先剪回去（300ms 合成层动画）
+      document.body.classList.add('dock-clipped');
+      clearTimeout(dockTimer);
+      // ② 剪完再把窗口缩回 302，并立刻解除 clip（此刻窗口只有 302 高，clip 已无意义）
+      dockTimer = setTimeout(() => {
+        dockSetHeight(302);
+        document.body.classList.add('no-clip-trans');
+        document.body.classList.remove('dock-clipped');
+        void glass.offsetHeight;
+        document.body.classList.remove('no-clip-trans');
+      }, DOCK_MS + 10);
+    }
+  }
+
+  // instant=true：不播过渡，直接跳到目标状态（打开面板时主进程强制收起扩展坞用）
+  function paintDock(open, instant) {
+    const wasOpen = dockOpen;
     dockOpen = !!open;
-    if (dockEl) dockEl.classList.toggle('open', dockOpen);
+    if (!dockEl) return;
+    if (instant) {
+      clearTimeout(dockTimer);
+      document.body.classList.add('dock-instant', 'no-clip-trans');
+      dockEl.classList.toggle('open', dockOpen);
+      document.body.classList.remove('dock-clipped');
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        document.body.classList.remove('dock-instant');
+        document.body.classList.remove('no-clip-trans');
+      }));
+    } else {
+      dockEl.classList.toggle('open', dockOpen);
+      if (wasOpen !== dockOpen) dockLayout(dockOpen);
+    }
   }
 
   if (dockBar) {
@@ -965,6 +1020,9 @@ if (KIND === 'panel') {
       if (API && API.setDock) API.setDock(want).catch(() => {});
     });
   }
+  // 主进程只在“强制复位”时通知（例如打开控制台时把扩展坞拨回收起）；
+  // 用户点手柄那一次自己已经改过状态了，这里的回声要忽略，否则会把动画打断。
+  if (API && API.onDock) API.onDock(({ open }) => { if (!!open !== dockOpen) paintDock(open, true); });
 
   // ---------- 自定义背景（这一版只存开关，不动颜色） ----------
   let settingsListeners = [];
@@ -1162,7 +1220,10 @@ if (KIND === 'panel') {
     API.getSettings().then((s) => {
       if (!s) return;
       applyLook(s.opacity, s.blur);
-      paintDock(!!s.dockOpen);
+      // 扩展坞永远从收起开始（用户 2026-10-18 定死）：只在用户点箭头后才展开
+      paintDock(false, true);
+      // 页面被手动刷新（Ctrl+R / devtools reload）时窗口可能还停在 434，这里拨回 302
+      if (window.innerHeight > 302) dockSetHeight(302);
       paintCustomBg(!!s.customBackground);
       if (s.slots) applySlots(s.slots);
       if (s.features && s.features.dock === false && dockEl) dockEl.hidden = true;

@@ -273,7 +273,6 @@ let stripHideTimer = null;
 // ---------------- 位置 ----------------
 // 扩展坞展开状态：窗口高度 = 基础高度（四宫格 + 手柄）+ 扩展区高度
 let dockOpen = false;
-let dockTimer = null;
 
 function panelHeight() {
   return PANEL_BASE_H + (dockOpen ? DOCK_AREA : 0);
@@ -287,26 +286,11 @@ function computeBounds() {
   };
 }
 
-// 抽屉式展开：只改高度，x / y / 宽度一个都不动 → 视觉上就是“从下面拉出来”。
-// 用 12 帧、每帧 16ms 的 setBounds 完成 190ms 动画，跟页面里 CSS 的 190ms 对齐。
-// （早年逐帧改尺寸掉过帧，那是因为每帧都在重抓磨砂底图；这里只在结束前抓一次。）
-function animatePanelHeight(target, done) {
-  if (!panelWin || panelWin.isDestroyed()) return;
-  const from = panelWin.getBounds().height;
-  const to = target.height;
-  if (from === to) { if (done) done(); return; }
-  const t0 = Date.now();
-  const dur = 190;
-  clearInterval(dockTimer);
-  dockTimer = setInterval(() => {
-    if (!panelWin || panelWin.isDestroyed()) { clearInterval(dockTimer); return; }
-    const k = Math.min(1, (Date.now() - t0) / dur);
-    const eased = 1 - Math.pow(1 - k, 3);            // ease-out cubic
-    const h = Math.round(from + (to - from) * eased);
-    panelWin.setBounds({ x: target.x, y: target.y, width: target.width, height: h });
-    if (k >= 1) { clearInterval(dockTimer); if (done) done(); }
-  }, 16);
-}
+// 抽屉式展开（2026-10-18 定稿）：主进程不再逐帧改窗口高度。
+// 逐帧 setBounds 会让整块玻璃（40px 模糊）每帧重算，实测掉到 33~44ms 一帧，看着就是“机械抖动”。
+// 现在只有两次尺寸跳变（302↔434），中间的可视动画全在页面里用 clip-path 完成；
+// 页面通过 IPC panel:height 告诉主进程什么时候该跳到哪个高度。
+const DOCK_MS = 300;
 
 // ---------------- 抓“背后桌面”做玻璃底图 ----------------
 // 为什么抓屏：Windows 自带的磨砂（acrylic）不可调、太浑浊，
@@ -523,11 +507,11 @@ function setDock(open, { animate = true } = {}) {
   const b = computeBounds().panel;
   log('[dock]', want ? '展开扩展区' : '收起扩展区', '→ 目标高度', b.height);
   if (!panelWin || panelWin.isDestroyed()) return { ok: true, open: dockOpen, changed: true };
-  if (!animate) {
-    panelWin.setBounds(b);
-  } else {
-    animatePanelHeight(b);
-  }
+  if (panelWin.webContents) panelWin.webContents.send('view:dock', { open: dockOpen });
+  // 高度由页面按 rAF 逐帧推过来（见 IPC panel:height）：
+  // setInterval 在 Windows 上会被计时器合并，帧间隔忽长忽短，看起来就是“机械抖动”；
+  // rAF 跟着 vsync 走，配合 CSS 的同一条缓动曲线，两边严格同步。
+  if (!animate) panelWin.setBounds(b);
   // 高度一变，旧底图就裁短了；动画结束后重抓一张推给页面，玻璃才不会有拉伸感
   setTimeout(() => {
     if (!panelWin || panelWin.isDestroyed()) return;
@@ -536,7 +520,7 @@ function setDock(open, { animate = true } = {}) {
         panelWin.webContents.send('view:backdrop', { data: shot });
       }
     });
-  }, animate ? 250 : 40);
+  }, animate ? DOCK_MS + 60 : 40);
   return { ok: true, open: dockOpen, changed: true };
 }
 
@@ -549,6 +533,15 @@ async function expand({ focus = true, reason = 'click' } = {}) {
     return;
   }
   const t0 = Date.now();
+
+  // 每次打开都从“只显示主四宫格”开始（用户 2026-10-18 定死）：
+  // 扩展坞不记忆上次状态，必须由用户主动点箭头才展开。
+  if (dockOpen) {
+    dockOpen = false;
+    settings.dockOpen = false;
+    saveSettings();
+  }
+  if (panelWin.webContents) panelWin.webContents.send('view:dock', { open: false });
 
   state = 'expanded';
   expandingAt = t0;
@@ -1158,6 +1151,17 @@ ipcMain.handle('env:info', () => {
 ipcMain.handle('settings:get', () => settings);
 
 // 扩展坞：展开 / 收起（高度动画在 setDock 里做，页面负责内容过渡）
+// 页面逐帧推高度（rAF），主进程只负责把窗口改到那一帧该有的高度。
+// 夹在 [PANEL_BASE_H, PANEL_BASE_H + DOCK_AREA] 之间，页面算错也不会把窗口搞坏。
+ipcMain.on('panel:height', (_e, value) => {
+  if (!panelWin || panelWin.isDestroyed()) return;
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return;
+  const h = Math.max(PANEL_BASE_H, Math.min(PANEL_BASE_H + DOCK_AREA, n));
+  const b = panelWin.getBounds();
+  if (b.height === h) return;
+  panelWin.setBounds({ x: b.x, y: b.y, width: b.width, height: h });
+});
 ipcMain.handle('panel:set-dock', (_e, open) => setDock(!!open));
 
 // 槽位分配：页面传 { main:[id|null×4], dock:[id…] }，主进程校验后落盘
@@ -1452,8 +1456,8 @@ if (!app.requestSingleInstanceLock()) {
 app.whenReady().then(() => {
   app.setAppUserModelId('com.deskpanel.app');
   loadSettings();
-  // 上次退出时扩展坞是开着的，这次展开就直接给到展开后的高度
-  dockOpen = !!settings.dockOpen;
+  // 扩展坞永远从“收起”开始：打开控制台只给主四宫格，展开要用户自己点箭头
+  dockOpen = false;
   loadApps();
 
   // 开机自启：只有第一次运行（settings.json 里没这个字段）才自动写一次注册表，

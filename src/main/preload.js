@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('panel', {
 
   // 扩展坞：展开/收起（主进程负责窗口高度，页面负责内容过渡）
   setDock: (open) => ipcRenderer.invoke('panel:set-dock', !!open),
+  setHeight: (h) => ipcRenderer.send('panel:height', h),
+  onDock: (cb) => ipcRenderer.on('view:dock', (_e, payload) => cb(payload)),
   // 槽位分配：{ main:[id|null×4], dock:[id…] }
   slotsSet: (slots) => ipcRenderer.invoke('slots:set', slots),
 

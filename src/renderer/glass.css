@@ -141,8 +141,13 @@ body.is-strip { background: transparent; }
 }
 
 /* ---------------- 内容 ---------------- */
+/* 固定 302 高：扩展坞展开时窗口会长到 434，但这一层**绝对不能**跟着变高，
+   否则 flex 会重新分配空间、四宫格被压缩，展开过程就会抖。
+   多出来的 132px 由“已经画好、绝对定位”的扩展区填充。 */
 .content {
-  position: absolute; inset: 0;
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 302px;
   display: flex; flex-direction: column;
   padding: 12px 14px 8px;
   color: var(--ink);
@@ -224,31 +229,49 @@ body.is-strip { background: transparent; }
 .cell.empty .cs { color: rgba(247, 249, 255, 0.30); }
 
 /* ---------------- 扩展坞 ---------------- */
-.dock { flex: 0 0 auto; }
+/* 动画原则（用户 2026-10-18 定死）：
+   ① 绝不动 height / margin（会重排）——扩展区是“已经画好的固定块”，
+      只靠窗口变高把它露出来；
+   ② 手柄（和页脚）用 transform 往下平移，所以展开后箭头永远贴在整个控制台最底部；
+   ③ 统一 300ms cubic-bezier(0.25, 0.8, 0.25, 1)，不要弹性、不要回弹。 */
+.dock {
+  flex: 0 0 auto;
+  position: relative;
+  height: 34px;              /* 只占手柄这一条，扩展区绝对定位、不参与布局 */
+}
 .dock[hidden] { display: none; }
 
 .dock-bar {
+  position: relative;
+  z-index: 2;                /* 展开后手柄会“走进”扩展区的地盘，必须压在它上面才点得到 */
   width: 100%; height: 34px;
   display: flex; align-items: center; justify-content: center;
   border: 0; background: transparent;
   color: rgba(247, 249, 255, 0.55);
   cursor: pointer;
-  transition: color 160ms ease;
+  transition: color 160ms ease, transform 300ms cubic-bezier(0.25, 0.8, 0.25, 1);
+  will-change: transform;
 }
 .dock-bar:hover { color: rgba(255, 255, 255, 0.95); }
+.dock.open .dock-bar { transform: translateY(132px); }
+
 .dock-chev {
   display: block; line-height: 0;
-  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 300ms cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 .dock.open .dock-chev { transform: rotate(180deg); }
 
-/* 扩展区高度与主进程的 DOCK_AREA(132) 严格一致，两边不同步会露白 */
+/* 扩展区：固定 132px，挂在手柄正下方；不参与流式布局，所以 0 重排。
+   窗口 302 高时它在窗外（自然被裁掉），窗口长到 434 就把这 132px 露出来。 */
 .dock-area {
-  height: 0;
-  overflow: hidden;
-  transition: height 190ms cubic-bezier(0.22, 1, 0.36, 1);
+  position: absolute;
+  z-index: 1;
+  left: 0; right: 0;
+  top: 34px;
+  height: 132px;
+  pointer-events: none;
 }
-.dock.open .dock-area { height: 132px; }
+.dock.open .dock-area { pointer-events: auto; }
 
 /* 复用 .cell 的一切：格子 171×91，跟上面四宫格一模一样 */
 .dock-grid {
@@ -443,12 +466,31 @@ body.is-strip { background: transparent; }
 .w-empty { font-size: 10px; color: var(--ink-dim); padding: 8px; }
 
 /* ---------------- 底部 ---------------- */
+/* 状态行现在在手柄上面（DOM 顺序：hdr → stage → ftr → dock），
+   所以展开时它不需要再跟着往下走：箭头下面就是扩展区，箭头永远贴底。 */
 .ftr {
   flex: 0 0 auto;
   display: flex; align-items: center; justify-content: space-between;
   font-size: 9.5px; color: rgba(247, 249, 255, 0.55);
   padding-top: 4px;
 }
+.dock.open ~ .ftr { transform: translateY(132px); }
+
+/* 抽屉展开/收起（2026-10-18 定稿）：
+   不做逐帧改窗口高度——每帧缩放 40px 模糊会吃掉整帧，实测卡 33~44ms。
+   现在改成：窗口一次性长到 434（此时整块玻璃被 clip 剪掉多出来的 132px，画面毫无变化），
+   然后用 clip-path 的 transition 把玻璃“放”出来，纯合成层，60fps 稳定；
+   收起时反过来，剪完再把窗口缩回去。 */
+.glass {
+  clip-path: inset(0 0 0 0);                 /* 必须写成 inset(…) 才跟下面那个状态可插值，none 是不可动画的 */
+  transition: clip-path 300ms cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+body.dock-clipped .glass { clip-path: inset(0 0 132px 0); }
+body.no-clip-trans .glass { transition: none; }
+
+/* 打开控制台时强制把扩展坞拨回收起状态，这一瞬间不要播过渡（否则会看到箭头往上滑一下） */
+.dock-instant .dock-bar,
+.dock-instant .dock-chev { transition: none !important; }
 
 /* ---------------- 悬浮按钮（绝对定位，不占文档流） ---------------- */
 .icon-btn {
