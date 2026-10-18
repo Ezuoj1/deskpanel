@@ -1,6 +1,16 @@
+![banner](docs/screenshots/banner.png)
+
 # 右上角控制台 · DeskPanel
 
-一个常驻屏幕右上角的玻璃质感控制台，给 Windows 11 用。按一次快捷键就能拉出四宫格，把最常用的四件事收进来：**快捷启动、QQ 音乐控制、Wallpaper Engine 壁纸、系统通知列表**。
+![platform](https://img.shields.io/badge/平台-Windows%2010%20%2F%2011-0078D4)
+![license](https://img.shields.io/badge/许可证-MIT-green)
+![electron](https://img.shields.io/badge/Electron-31-47848F?logo=electron&logoColor=white)
+![lang](https://img.shields.io/badge/语言-简体中文-red)
+
+> **只支持 Windows。** 不需要是 Windows 11——**Windows 10（1809 及以上）也能跑**（见 [支持的系统](#支持的系统)）。
+> **macOS / Linux 跑不起来**，因为四个模块全靠 Windows 专有接口，没有跨平台替代品。
+
+一个常驻屏幕右上角的玻璃质感控制台，给 Windows 用。按一次快捷键就能拉出四宫格，把最常用的四件事收进来：**快捷启动、QQ 音乐控制、Wallpaper Engine 壁纸、系统通知列表**。
 
 不用切窗口、不用找托盘图标，点一下就能用，点一下就收起。
 
@@ -47,9 +57,34 @@
 
 ---
 
+## 支持的系统
+
+| 系统 | 能不能用 | 说明 |
+|---|---|---|
+| **Windows 11** | ✅ 可以 | 开发与测试环境（Windows 11 build 26100），四个模块全部实测通过 |
+| **Windows 10（1809 及以上）** | ✅ 应该可以 | 用到的接口在这个版本都已提供（SMTC 1809+、通知监听 1809+、Core Audio 一直有），但**没有机器实测**；有问题请开 issue |
+| Windows 10（1809 以前） | ❌ 不行 | 缺 `Windows.Media.Control`（SMTC）等接口 |
+| **macOS** | ❌ 不行 | 见下 |
+| **Linux** | ❌ 不行 | 见下 |
+
+### 为什么 macOS / Linux 跑不起来
+
+不是"没适配"，是核心功能没有跨平台替代品：
+
+| 模块 | 依赖的 Windows 接口 | macOS / Linux 对应物 |
+|---|---|---|
+| 音乐控制 | SMTC（`Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager`） | macOS 有私有 `MPNowPlayingInfoCenter`、Linux 各播放器各一套（MPRIS），要重写 |
+| 音量滑块 | Core Audio（`ISimpleAudioVolume`，单应用音量） | 要换成 `CoreAudio` / `PulseAudio` 全套封装 |
+| 通知 | `UserNotificationListener`（通知中心） | macOS 通知中心不给第三方读，Linux 没有统一通知中心 |
+| 壁纸 | Wallpaper Engine（Windows 独占软件）+ 官方命令行 | 无对应软件 |
+| 全屏探测 / 透明置顶窗 | `user32` / `gdi32`（`EnumWindows`、`PrintWindow`、DPI） | 完全不同的一套（Cocoa / X11 / Wayland） |
+| 启动器 | `.cmd` + `.vbs` + `shell.openPath` | 无 |
+
+要移植等于重写 `native/` 下全部四个助手 + 一半主进程。短期不做；如果以后要做，macOS 版会先做（音乐 + 快捷启动 + 全屏隐藏），通知和壁纸大概率没有。
+
 ## 环境要求
 
-- Windows 10 / 11（64 位）
+- **Windows 10（1809+）或 Windows 11**（64 位）
 - [Node.js](https://nodejs.org/) 18 或更高
 - .NET Framework 4.x（Windows 自带，用来编译 `native/` 下三个几十行的小工具）
 

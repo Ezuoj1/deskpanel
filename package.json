@@ -25,6 +25,9 @@
   "engines": {
     "node": ">=18"
   },
+  "os": [
+    "win32"
+  ],
   "scripts": {
     "start": "electron .",
     "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File native/build.ps1"
