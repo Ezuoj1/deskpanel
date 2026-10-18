@@ -31,19 +31,97 @@ const COLLAPSE_MS = 260;
 
 // ---------------- 设置 ----------------
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
-let settings = { opacity: 0.32, blur: 26 };   // 透明度 / 模糊半径
+// openAtLogin 默认 true：这是“常驻桌面右上角”的工具，开机就该在。
+let settings = { opacity: 0.32, blur: 26, openAtLogin: true };
 
 function loadSettings() {
+  let hasLoginFlag = false;
   try {
-    settings = { ...settings, ...JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8')) };
+    const raw = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+    hasLoginFlag = typeof raw.openAtLogin === 'boolean';
+    settings = { ...settings, ...raw };
   } catch { /* 第一次运行 */ }
+  if (typeof settings.openAtLogin !== 'boolean') settings.openAtLogin = true;
+  // 第一次跑（老版本 settings.json 里没有这个字段）：默认帮他打开开机自启；
+  // 之后一律以 settings 为准，不再每次启动都去改注册表（否则用户从任务管理器关掉也会被我们改回来）。
+  settingsNeedsLoginSync = !hasLoginFlag;
 }
+let settingsNeedsLoginSync = false;
 
 function saveSettings() {
   try {
     fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
     fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2), 'utf8');
   } catch (e) { log('[settings] 存盘失败', e.message); }
+}
+
+// ---------------- 开机自启 ----------------
+// 开发模式（没打包成 exe）时 process.execPath 是 node_modules 里的 electron.exe，
+// 光注册它只会打开一个空白的 Electron 窗口，所以必须把工程目录作为参数一起登记。
+function loginItemArgs() {
+  if (app.isPackaged) return [];
+  return [app.getAppPath()];
+}
+
+// 我们在注册表 HKCU\...\Run 下面实际写了什么（Electron 用 app.name 当值名）
+function loginRunKey() {
+  return { hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run' };
+}
+
+// 直接读注册表核对——getLoginItemSettings 在 dev 模式下经常对不上，注册表才是事实。
+// 值名不一定等于 app.name：调用过 setAppUserModelId() 之后，Electron 会用那个 AppID
+// （我们这里是 com.deskpanel.app）当值名，所以这里按“命令行里有没有我们的 exe/工程目录”来找。
+function readRunEntry() {
+  try {
+    const { execFileSync } = require('child_process');
+    const out = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'], { encoding: 'utf8', windowsHide: true });
+    const exe = String(process.execPath || '').toLowerCase();
+    const appPath = String(app.getAppPath() || '').toLowerCase();
+    for (const raw of out.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || /^HKEY/i.test(line) || !/REG_/i.test(line)) continue;
+      const low = line.toLowerCase();
+      if (exe && low.includes(exe)) return line;
+      if (!app.isPackaged && appPath && low.includes(appPath)) return line;
+    }
+    return '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function loginState() {
+  let os = {};
+  try { os = app.getLoginItemSettings({ path: process.execPath, args: loginItemArgs() }); } catch (e) { os = {}; }
+  const entry = readRunEntry();
+  return {
+    // 以系统事实为准：注册表里真有这一条，或者系统自己说会启动
+    enabled: !!entry || !!os.openAtLogin,
+    openAtLogin: !!os.openAtLogin,
+    willLaunch: !!os.executableWillLaunchAtLogin,
+    execPath: process.execPath,
+    args: loginItemArgs(),
+    packaged: app.isPackaged,
+    runEntry: entry,
+  };
+}
+
+function applyLoginItem(enabled) {
+  const on = !!enabled;
+  settings.openAtLogin = on;
+  saveSettings();
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: on,
+      path: process.execPath,
+      args: loginItemArgs(),
+      openAsHidden: false,
+    });
+    log('[login] openAtLogin =', on, '|', JSON.stringify(loginState()));
+  } catch (e) {
+    log('[login] 设置开机自启失败', e.message);
+  }
+  return loginState();
 }
 
 function log(...args) { if (DEBUG) console.log(...args); }
@@ -344,6 +422,25 @@ function createWindows() {
 
   panelWin.on('closed', () => { panelWin = null; });
   stripWin.on('closed', () => { stripWin = null; });
+
+  // 点窗口的 ✕ 只收到托盘，不真退出（用户只允许从托盘右键「退出」彻底结束）。
+  // 面板的 ✕ 走 collapse：窗口滑回窄条，托盘图标一直留着；窄条自己的 ✕ 才真隐藏。
+  const hideOnClose = (win, tag, onHide) => {
+    win.on('close', (e) => {
+      if (app.isQuitting) return;
+      e.preventDefault();
+      log('[close] ' + tag + ' 关闭 → 收到托盘');
+      try {
+        if (typeof onHide === 'function') onHide();
+        else win.hide();
+      } catch (err) { }
+    });
+  };
+  hideOnClose(panelWin, 'panel', () => {
+    if (state === 'expanded' || state === 'animating') collapse('close-btn');
+    else panelWin.hide();
+  });
+  hideOnClose(stripWin, 'strip');
 }
 
 // ---------------- 展开 / 收起 ----------------
@@ -351,7 +448,7 @@ function createWindows() {
 async function expand({ focus = true, reason = 'click' } = {}) {
   if (!panelWin || state === 'expanded') return;
   // 全屏应用正在跑：默认不出来（用户主动按快捷键/点托盘时才破例）
-  if (fullscreenOn && !fsOverride && reason !== 'hotkey' && reason !== 'tray' && reason !== 'tray-click' && reason !== 'tray-dblclick') {
+  if (fullscreenOn && !fsOverride && reason !== 'hotkey' && reason !== 'tray' && reason !== 'tray-click' && reason !== 'tray-dblclick' && reason !== 'second-instance') {
     log('[expand] 全屏中，忽略', reason);
     return;
   }
@@ -873,20 +970,75 @@ function runHidden(cmdBody, tag) {
 function fsDir() { return path.dirname(fsFile); }
 
 // ---------------- 托盘 ----------------
-function createTray() {
-  const iconPath = path.join(__dirname, '..', '..', 'assets', 'tray-16.png');
-  let img = nativeImage.createFromPath(iconPath);
-  if (img.isEmpty()) img = nativeImage.createEmpty();
-  try { tray = new Tray(img); } catch (e) { log('[tray] 创建失败', e.message); return; }
-  tray.setToolTip('右上角控制台');
+// 兜底图标：万一 assets/ 里那两张 png 找不到（打包漏文件、被安全软件删了），
+// 用一段内嵌的 32×32 PNG 顶上，保证托盘一定看得见，而不是“程序在跑但找不到图标”。
+const TRAY_FALLBACK_PNG = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAMQSURBVFhH1dZNTxpBGAdwjh49euxH8OitfIIuCAiKMsqyiviGdlUQENpDm/ZQE3sgTZu+HFqamNY0TWrSi4ceOPbYQ6VbFVEEWVhY1mr1aXa3GBmRWRSa9J88NzK/Z2bnBZ3uf82CS+wK0JI+QBf180gt/DdNTRiVOkIu0R10Ha4F6TIE6DIsOEXwD5XAP1QE36BcAsw78nEW5X3ziL+Bj3GlhBG0hxgpEnSVpaBLgro4KsAcKsCsI68U289HWZTuwMfUnDAt6UPMIR+S4UbxAR7YgRzM2A+k6f59Gz42MUGXNBhiJOk6+O3+A5iRy56FaXsmghuXRsYXmUNoHp4Fb18GJnszS7h1IeqyN3PmKj7Vuw9TvWmYtO25cfMsyk6/5jevj6dh0roneSzJTtxWssj8WmopbtuDCesujFlTq7itzP5KR61BfNyagrGeHbiwCiG67GsUfxQQIHpPgOVIoSFcacC8Ha1qIEhLca344ztFSKd+w/kI+RN48qCgDbckYdSc3D3Dw4hvbwSvl9dRgYirDWyDx8Kpn0F9WMi4n85DLnOCm1Upi6cQdGeIuNu8JZd6Q/qdooGEa5l9JS+X82TctAXDRs6rroBTdJNwebe/eyHiVs18WikS8RHTJjBGTr2e/ahoI+HyUXv6UMCtmnn7LE/Eh7t/Am3gfEoD8p8JEi6f88BwDo6PTnHvQu5Op4k4Y+TARXGDSgMsKnWQ8Mo5X3lewr2qfPlc0oQrDRi5rr8HUaebcxQ4El65ZD7GSnBUYyXi6yJ47SltuCEhIcS1nTUw6xCWtOCVSyYykYX3rwRlw314I8D9uX3tMzf8kKv6PWAR36kV13LJEHBwUt8NVQ0oTQzkVv8JfivxFbeVsH18Z6txmkrUnn0lXnvG10p8iEpUv4K14rVnY63AndRGHN08t/MvSxhxbVO2TKzpOMW141bdTFjTkWbg8rJrmnmtjFl39eM9qfWr4Rvf6m64RjLas2PwWHZiHnNS0oCvOakN9Z5vRUZM23p396ZvxLQZkZ/UStEUp6+6XjXkD/bbIMB5g4BlAAAAAElFTkSuQmCC';
+
+function trayImage() {
+  // 绝对路径依次试：打包后 __dirname 在 asar 里，也能读到 asar 内的静态资源
+  const candidates = [
+    path.join(__dirname, '..', '..', 'assets', 'tray-32.png'),
+    path.join(__dirname, '..', '..', 'assets', 'tray-16.png'),
+    path.join(process.resourcesPath || '', 'app', 'assets', 'tray-32.png'),
+    path.join(process.resourcesPath || '', 'assets', 'tray-32.png'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!p || !fs.existsSync(p)) continue;
+      const img = nativeImage.createFromPath(p);
+      if (!img.isEmpty()) {
+        log('[tray] 图标来源', p, JSON.stringify(img.getSize()));
+        return img.resize({ width: 16, height: 16 });
+      }
+    } catch (e) { log('[tray] 读图标失败', p, e.message); }
+  }
+  log('[tray] 静态图标都不可用，用内嵌兜底图标');
+  return nativeImage.createFromDataURL('data:image/png;base64,' + TRAY_FALLBACK_PNG);
+}
+
+function rebuildTrayMenu() {
+  if (!tray) return;
+  const loginOn = (() => { try { return loginState().enabled; } catch (e) { return settings.openAtLogin !== false; } })();
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '展开', click: () => expand({ focus: true, reason: 'tray' }) },
-    { label: '收起', click: () => collapse('tray') },
+    {
+      label: '打开控制台',
+      click: () => expand({ focus: true, reason: 'tray' }),
+    },
+    {
+      label: '设置…',
+      click: () => {
+        expand({ focus: true, reason: 'tray' });
+        setTimeout(() => {
+          try { panelWin && panelWin.webContents.send('view:open-settings'); } catch (e) { }
+        }, 420);
+      },
+    },
+    { type: 'separator' },
+    {
+      label: '开机自启',
+      type: 'checkbox',
+      checked: loginOn,
+      click: (item) => { applyLoginItem(item.checked); rebuildTrayMenu(); },
+    },
     { type: 'separator' },
     { label: '退出', click: () => { app.isQuitting = true; app.quit(); } },
   ]));
+  log('[tray] 菜单已重建：打开控制台 / 设置… / 开机自启(' + (loginOn ? '✔' : '✘') + ') / 退出');
+}
+
+function createTray() {
+  if (tray) return;
+  try {
+    tray = new Tray(trayImage());
+  } catch (e) {
+    log('[tray] 创建失败', e.message);
+    return;
+  }
+  tray.setToolTip('右上角控制台 · Ctrl+Alt+Space');
+  rebuildTrayMenu();
   tray.on('click', () => { if (state === 'expanded') collapse('tray-click'); else expand({ focus: true, reason: 'tray-click' }); });
   tray.on('double-click', () => expand({ focus: true, reason: 'tray-dblclick' }));
+  log('[tray] 已创建');
 }
 
 // ---------------- IPC ----------------
@@ -908,6 +1060,14 @@ ipcMain.handle('env:info', () => {
 });
 
 ipcMain.handle('settings:get', () => settings);
+
+// 开机自启：给页面里的开关用
+ipcMain.handle('login:get', () => loginState());
+ipcMain.handle('login:set', (_e, enabled) => {
+  const st = applyLoginItem(!!enabled);
+  rebuildTrayMenu();
+  return st;
+});
 
 // 调试用：把页面里“实时背景”的当前一帧存成图片，方便肉眼确认抓到的是真桌面
 ipcMain.handle('debug:save-live', async (_e, dataUrl) => {
@@ -1160,11 +1320,30 @@ ipcMain.handle('wall:open', async () => {
   return err ? { ok: false, error: err } : { ok: true };
 });
 
+// ---------------- 单实例 ----------------
+// 开机自启 + 手动双击很容易同时起来两个：那会出现两个托盘图标、两套媒体/通知小助手，
+// 互相抢同一个临时文件。所以只允许一个实例，第二次启动直接让它退出，
+// 顺便把已经存在的那一个叫到前面来（用户体感是“点了就出来”）。
+if (!app.requestSingleInstanceLock()) {
+  log('[single] 已经有一个控制台在跑，这次启动直接退出');
+  app.exit(0);
+} else {
+  app.on('second-instance', () => {
+    log('[single] 又启动了一次，把现有控制台叫出来');
+    if (fullscreenOn) { fsOverride = true; hiddenByFullscreen = false; }
+    expand({ focus: true, reason: 'second-instance' });
+  });
+}
+
 // ---------------- 启动 ----------------
 app.whenReady().then(() => {
   app.setAppUserModelId('com.deskpanel.app');
   loadSettings();
   loadApps();
+
+  // 开机自启：只有第一次运行（settings.json 里没这个字段）才自动写一次注册表，
+  // 之后完全听用户的（页面开关 / 托盘勾选），我们不擅自改回来。
+  if (settingsNeedsLoginSync) applyLoginItem(true);
 
   // 实时背景：把“屏幕本身”作为一路视频流给面板页面（不落地、不存盘）。
   // 页面里用 CSS filter: blur() 现糊现用，所以背后开抖音/换壁纸都是实时变化的。

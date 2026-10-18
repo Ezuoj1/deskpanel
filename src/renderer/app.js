@@ -86,6 +86,9 @@ if (KIND === 'panel') {
   const rBlur = document.getElementById('r-blur');
   const vOpacity = document.getElementById('v-opacity');
   const vBlur = document.getElementById('v-blur');
+  const cLogin = document.getElementById('c-login');
+  const vLogin = document.getElementById('v-login');
+  const tLogin = document.getElementById('t-login');
   const hintEsc = document.getElementById('hint-esc');
 
   // 音乐模块
@@ -829,10 +832,44 @@ if (KIND === 'panel') {
     settings.hidden = !settingsOpen;
     settings.classList.toggle('is-on', settingsOpen);
     btnGear.classList.toggle('is-on', settingsOpen);
+    if (settingsOpen) syncLogin();
   }
 
   btnGear.addEventListener('click', (e) => { e.stopPropagation(); toggleSettings(); });
   settings.addEventListener('click', (e) => e.stopPropagation());
+
+  // ---------- 开机自启 ----------
+  // 显示的是“注册表里到底有没有”，不是我们自己的字段——以系统事实为准。
+  function paintLogin(st) {
+    const on = !!(st && st.enabled);
+    cLogin.checked = on;
+    if (!st) { vLogin.textContent = '读取失败'; return; }
+    if (vLogin) vLogin.textContent = on ? '已开启' : '已关闭';
+    if (tLogin) {
+      tLogin.textContent = st.runEntry
+        ? '注册表已写入，下次开机自动出现'
+        : (on ? '已开启，但注册表里还没看到（下次启动会补写）' : '开机时不会自动运行');
+    }
+    cLogin.title = (st.execPath || '') + (st.args && st.args.length ? ' ' + st.args.join(' ') : '');
+  }
+
+  async function syncLogin() {
+    if (!API || !API.loginGet) return;
+    try { paintLogin(await API.loginGet()); } catch (e) { paintLogin(null); }
+  }
+
+  if (cLogin) {
+    cLogin.addEventListener('change', async () => {
+      const want = cLogin.checked;
+      if (vLogin) vLogin.textContent = want ? '写入中…' : '移除中…';
+      try {
+        const st = await API.loginSet(want);
+        paintLogin(st);
+      } catch (e) {
+        paintLogin(null);
+      }
+    });
+  }
 
   let saveTimer = null;
   function onSlider() {
@@ -907,6 +944,10 @@ if (KIND === 'panel') {
     // 通知推送：主进程收到新通知就推过来，这里只管刷列表 + 红点
     if (API.onNotifState) API.onNotifState((p) => renderNotif(p));
     loadNotifs();
+
+    // 托盘点「设置…」→ 把设置浮层打开
+    if (API.onOpenSettings) API.onOpenSettings(() => toggleSettings(true));
+    syncLogin();
 
     // 快捷启动：先拉一次列表，这样第一次展开就有内容
     loadApps();

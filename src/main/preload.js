@@ -51,6 +51,12 @@ contextBridge.exposeInMainWorld('panel', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.send('settings:set', patch || {}),
 
+  // 开机自启：读真实状态（含注册表）/ 开关
+  loginGet: () => ipcRenderer.invoke('login:get'),
+  loginSet: (enabled) => ipcRenderer.invoke('login:set', enabled),
+  // 托盘点“设置…”时，主进程让面板把设置浮层打开
+  onOpenSettings: (cb) => ipcRenderer.on('view:open-settings', () => cb()),
+
   // 主进程推“状态变了”
   onState: (cb) => ipcRenderer.on('view:set-state', (_e, payload) => cb(payload)),
   // 主进程推“背后桌面的照片（已裁好）”，用来当玻璃底图
