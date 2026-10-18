@@ -215,21 +215,19 @@
         <div class="slots" id="slots"></div>
       </div>
 
-      <!-- 状态行放在手柄上面：这样抽屉箭头永远是整个控制台最底部那一条 -->
-      <footer class="ftr">
-        <span id="pos">x=0 y=0</span>
-        <span id="hint-esc">Esc / 点外部 收起</span>
-      </footer>
-
-      <!-- 扩展坞：一条手柄 + 往下抽出来的扩展区（宽度与主区完全一致） -->
+      <!-- 底部那一条：中间是抽屉手柄，右边是提示文字。
+           整条一起向下平移，所以展开后提示文字仍然贴在控制台最右下角。 -->
       <div class="dock" id="dock">
-        <button class="dock-bar" id="dock-bar" title="展开 / 收起扩展区">
-          <span class="dock-chev" id="dock-chev">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-              <path d="M6 9.5 12 15l6-5.5"></path>
-            </svg>
-          </span>
-        </button>
+        <div class="dock-band" id="dock-band">
+          <button class="dock-bar" id="dock-bar" title="展开 / 收起扩展区">
+            <span class="dock-chev" id="dock-chev">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                <path d="M6 9.5 12 15l6-5.5"></path>
+              </svg>
+            </span>
+          </button>
+          <span class="ftr-hint" id="hint-esc">Esc / 点外部 收起</span>
+        </div>
         <div class="dock-area" id="dock-area">
           <div class="dock-grid" id="dock-grid"></div>
         </div>

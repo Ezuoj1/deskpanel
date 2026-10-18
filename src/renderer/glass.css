@@ -193,7 +193,10 @@ body.is-strip { background: transparent; }
   grid-template-rows: 1fr 1fr;
   gap: 9px;
   height: 100%;
+  /* 主区格子固定 91 高（和扩展区里的格子一模一样），多出来的高度上下均分 */
+  align-content: center;
 }
+.l1-grid .cell { height: 91px; }
 
 .stage[data-level="2"] .l1 { opacity: 0; transform: scale(0.94); pointer-events: none; }
 .stage[data-level="2"] .l2 { opacity: 1; transform: scale(1); pointer-events: auto; }
@@ -246,17 +249,14 @@ body.is-strip { background: transparent; }
 
 .dock-bar {
   position: relative;
-  z-index: 2;                /* 展开后手柄会“走进”扩展区的地盘，必须压在它上面才点得到 */
-  width: 100%; height: 34px;
+  width: auto; height: 34px; padding: 0;
   display: flex; align-items: center; justify-content: center;
   border: 0; background: transparent;
   color: rgba(247, 249, 255, 0.75);
   cursor: pointer;
-  transition: color 160ms ease, transform 300ms cubic-bezier(0.25, 0.8, 0.25, 1);
-  will-change: transform;
+  transition: color 160ms ease;
 }
 .dock-bar:hover { color: #fff; }
-.dock.open .dock-bar { transform: translateY(132px); }
 
 /* 手柄那个小箭头：给一个小小的深色底 + 描边，白墙纸/白窗口上也看得见 */
 .dock-chev {
@@ -291,14 +291,43 @@ body.is-strip { background: transparent; }
   align-content: center;
 }
 .dock-grid .cell { height: 91px; }
+
+/* 二次入场：外框（clip）先展开，扩展区里的格子等 ~190ms 再逐个弹入。
+   只碰 transform + opacity，整段动画都在合成层上跑。 */
+.dock-grid .cell,
+.dock-grid .dock-hint {
+  opacity: 0;
+  transform: scale(0.7);
+  transform-origin: 50% 55%;
+  will-change: transform, opacity;
+}
+.dock.open .dock-grid .cell,
+.dock.open .dock-grid .dock-hint {
+  animation: dockCellIn 300ms cubic-bezier(0.22, 0.9, 0.28, 1.12) both;
+}
+.dock.open .dock-grid > :nth-child(1) { animation-delay: 330ms; }
+.dock.open .dock-grid > :nth-child(2) { animation-delay: 380ms; }
+.dock.open .dock-grid > :nth-child(3) { animation-delay: 430ms; }
+.dock.open .dock-grid > :nth-child(4) { animation-delay: 480ms; }
+@keyframes dockCellIn {
+  from { opacity: 0; transform: scale(0.7); }
+  to   { opacity: 1; transform: scale(1); }
+}
+/* 启动/恢复状态时不要放动画，直接是最终样子 */
+body.dock-instant .dock-grid .cell,
+body.dock-instant .dock-grid .dock-hint {
+  animation: none !important;
+  opacity: 1;
+  transform: none;
+}
 .dock-hint {
   grid-column: 1 / -1;
   display: flex; align-items: center; justify-content: center;
   height: 68px;
-  border: 1px dashed rgba(255, 255, 255, 0.18);
+  border: 1px dashed rgba(255, 255, 255, 0.34);
   border-radius: 14px;
   font-size: 10px;
-  color: rgba(247, 249, 255, 0.42);
+  color: rgba(247, 249, 255, 0.82);
 }
 
 .mod {
@@ -475,15 +504,26 @@ body.is-strip { background: transparent; }
 .w-empty { font-size: 10px; color: var(--ink-dim); padding: 8px; }
 
 /* ---------------- 底部 ---------------- */
-/* 状态行现在在手柄上面（DOM 顺序：hdr → stage → ftr → dock），
-   所以展开时它不需要再跟着往下走：箭头下面就是扩展区，箭头永远贴底。 */
-.ftr {
-  flex: 0 0 auto;
-  display: flex; align-items: center; justify-content: space-between;
-  font-size: 9.5px; color: rgba(247, 249, 255, 0.55);
-  padding-top: 4px;
+/* 底部那一条：中间手柄 + 右边提示。整条用 transform 平移，展开/收起都平滑，
+   提示文字永远贴在控制台最右下角（不会被扩展区盖住）。 */
+.dock-band {
+  position: relative;
+  z-index: 2;                /* 展开后手柄会“走进”扩展区的地盘，必须压在它上面才点得到 */
+  height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 300ms cubic-bezier(0.25, 0.8, 0.25, 1);
+  will-change: transform;
 }
-.dock.open ~ .ftr { transform: translateY(132px); }
+.dock.open .dock-band { transform: translateY(132px); }
+
+.ftr-hint {
+  position: absolute;
+  right: 12px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 9.5px; color: rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  white-space: nowrap;
+}
 
 /* 抽屉展开/收起（2026-10-18 定稿第 5 版）：
    全程只动 clip-path（合成层动画，实测帧间隔 ~5.5ms 完全均匀，且没有任何一次性卡顿）。
@@ -634,7 +674,7 @@ body.dock-instant .glass { transition: none !important; }
         背景暗，白字保持白。没有采样、没有定时器，所以不存在延迟。
    注意：只作用在“字和图标”这一层，卡片底色不参与混合。
    =================================================================== */
-.t1, .t2, .ftr, .ico, .cell .ico {
+.t1, .t2, .ftr-hint, .dock-hint, .ico, .cell .ico {
   color: #fff;
   mix-blend-mode: difference;
   text-shadow: none;

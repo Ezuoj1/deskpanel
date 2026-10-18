@@ -1245,7 +1245,6 @@ if (KIND === 'panel') {
 
     API.info().then((i) => {
       liveInfo = i;
-      document.getElementById('pos').textContent = `x=${i.contentPos.x} y=${i.contentPos.y}`;
       document.documentElement.classList.toggle('dark', !!i.dark);
       if (!NO_LIVE) startLive();
       window.__dumpLive = dumpLiveFrame;
