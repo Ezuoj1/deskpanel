@@ -1,0 +1,695 @@
+/* =====================================================================
+   右上角控制台 · 样式  v1.9
+   设计要点：
+   1) 玻璃 = 一张“背后桌面的模糊照片” + 一层染色 + 一条高光，全部装在 .glass 里；
+   2) 动画只碰 .glass 的 transform / opacity（GPU 合成，不重排、不掉帧）；
+   3) 齿轮/返回/收起三个按钮 absolute 定位，永远不占文档流、不挤文案。
+   ===================================================================== */
+
+:root {
+  --op: 0.30;          /* 背景不透明度（滑块控制） */
+  --blur: 26px;        /* 背景模糊（滑块控制） */
+  --r: 22px;           /* 玻璃圆角 */
+  --ink: #ffffff;      /* 主文字 */
+  --ink-dim: rgba(255, 255, 255, 0.78);
+  --stroke: rgba(255, 255, 255, 0.48);
+  --stroke-soft: rgba(255, 255, 255, 0.22);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* 这条必须写在最前面：HTML 的 hidden 属性默认只给一个很弱的 display:none，
+   会被下面 .panel{display:block} 这种规则“顶掉”，导致隐藏的层其实还在屏幕上，
+   只是看不见，结果就是点窄条时点到里面那些看不见的按钮（事件穿透）。
+   加上 !important，hidden 说了算。 */
+[hidden] { display: none !important; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+body.is-strip { background: transparent; }
+
+/* ---------------- 窄条（贴着屏幕右边缘的一道细边） ---------------- */
+.strip {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: flex-end;
+  cursor: pointer;
+  /* 看得见看不见都一样：给整块热区 1% 的白，保证鼠标点在哪里都算点在这条边上
+     （有些系统会把全透明的像素当成“这里没有东西”，点下去会穿透到桌面） */
+  background: rgba(255, 255, 255, 0.01);
+}
+.strip-cap {
+  width: 18px; height: 136px;
+  margin-right: 0;
+  border-radius: 10px 0 0 10px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.30));
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-right: none;
+  box-shadow: -2px 0 14px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  backdrop-filter: blur(6px);
+  transition: transform 160ms ease, background 160ms ease;
+  pointer-events: none;               /* 点事件统一交给 .strip 处理，内部不允许单独响应 */
+}
+.strip:hover .strip-cap,
+.strip.press .strip-cap {
+  transform: translateX(-3px) scaleY(1.04);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.44));
+}
+.dot {
+  width: 3px; height: 3px; border-radius: 50%;
+  background: rgba(60, 70, 90, 0.55);
+}
+
+/* ---------------- 面板外层 ---------------- */
+.panel {
+  position: absolute; inset: 0;
+  display: block;
+  background: transparent;
+}
+
+/* ---------------- 整块玻璃 ---------------- */
+.glass {
+  position: absolute;
+  left: 0; top: 0;
+  width: 380px; height: 268px;
+  border-radius: var(--r);
+  transform-origin: right top;      /* 从右上角往外长，跟窄条的方向一致 */
+  overflow: hidden;
+  will-change: transform, opacity;
+  contain: paint;
+  border: 1px solid var(--stroke);
+  /* 只保留“内高光”，不留任何外阴影：
+     外面那层大黑影在浅色桌面上会像一块方形脏底，圆角也压不干净。 */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.12);
+  background: transparent;
+}
+
+/* 实时背景：屏幕本身的一路视频流，用 CSS filter 现糊现用。
+   （不是截图：背后开视频/换壁纸，这里能实时跟着变）
+   位置由 JS 按“面板在屏幕上的坐标”精确对齐，所以看到的就是正后方的画面。 */
+.live {
+  position: absolute; left: 0; top: 0;
+  width: 100%; height: 100%;
+  object-fit: fill;
+  filter: blur(var(--blur)) saturate(165%) brightness(1.05);
+  pointer-events: none;
+  display: none;
+}
+.glass.is-live .live { display: block; }
+.glass.is-live .backdrop { display: none; }
+
+/* 背后桌面的模糊照片：整体放大一点点，避免模糊边缘出现透明圈 */
+.backdrop {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  transform: scale(1.14);
+  filter: blur(var(--blur)) saturate(165%) brightness(1.06);
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* 染色：滑块越大越“实”，越小越通透（以白玻璃为主，避免发灰发脏） */
+.tint {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 80% at 12% 0%, rgba(255, 255, 255, calc(0.08 + var(--op) * 0.20)) 0%, rgba(255, 255, 255, 0) 62%),
+    linear-gradient(158deg,
+      rgba(238, 244, 255, calc(0.05 + var(--op) * 0.30)) 0%,
+      rgba(208, 221, 245, calc(0.08 + var(--op) * 0.34)) 100%);
+}
+
+/* 顶部高光：让玻璃有“厚度” */
+.sheen {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0) 24%),
+    radial-gradient(140% 60% at 100% 0%, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 60%);
+  mix-blend-mode: screen;
+}
+
+/* ---------------- 内容 ---------------- */
+.content {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  padding: 12px 14px 8px;
+  color: var(--ink);
+  text-shadow: 0 1px 2px rgba(10, 14, 22, 0.35);
+}
+
+.hdr {
+  display: flex; align-items: center; gap: 9px;
+  padding-right: 78px;               /* 给右上角悬浮按钮留出位置（按钮本身不占流） */
+  height: 32px;
+  flex: 0 0 auto;
+}
+.logo {
+  width: 28px; height: 28px; border-radius: 9px;
+  display: grid; place-items: center;
+  color: #fff;
+  background: linear-gradient(150deg, #7b8cff, #b06cff);
+  box-shadow: 0 4px 12px rgba(110, 100, 255, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.titles { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+.t1 { font-size: 13.5px; font-weight: 700; letter-spacing: 0.2px; }
+.t2 { font-size: 10.5px; color: var(--ink-dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 舞台：两层叠在同一个格子里，切换只做 transform/opacity，不重排 */
+.stage { position: relative; flex: 1 1 auto; margin-top: 8px; }
+
+.view {
+  position: absolute; inset: 0;
+  transition: opacity 220ms ease, transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+}
+
+.l1 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 9px;
+}
+
+.stage[data-level="2"] .l1 { opacity: 0; transform: scale(0.94); pointer-events: none; }
+.stage[data-level="2"] .l2 { opacity: 1; transform: scale(1); pointer-events: auto; }
+.l2 { opacity: 0; transform: scale(0.96); pointer-events: none; }
+
+.cell {
+  position: relative;
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start;
+  gap: 3px;
+  padding: 10px 11px;
+  border-radius: 14px;
+  border: 1px solid var(--stroke-soft);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.07));
+  color: inherit; font: inherit; text-align: left;
+  cursor: pointer;
+  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+  will-change: transform;
+}
+.cell:hover { background: linear-gradient(160deg, rgba(255, 255, 255, 0.30), rgba(255, 255, 255, 0.12)); border-color: rgba(255, 255, 255, 0.34); }
+.cell:active { transform: scale(0.975); }
+.cell .ico { color: #fff; opacity: 0.92; }
+.cell .ct { font-size: 12.5px; font-weight: 700; margin-top: 2px; }
+.cell .cs { font-size: 10px; color: var(--ink-dim); }
+
+.mod {
+  height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px;
+  border-radius: 14px;
+  border: 1px solid var(--stroke-soft);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08));
+}
+.mod-ico { color: #fff; opacity: 0.92; }
+.mod-title { font-size: 14px; font-weight: 700; }
+.mod-sub { font-size: 10.5px; color: var(--ink-dim); }
+
+/* ---------------- 音乐模块（SMTC） ---------------- */
+.mod.music {
+  align-items: stretch; justify-content: flex-start;
+  gap: 9px;
+  padding: 12px 14px;
+  text-align: left;
+  /* 亮底图（白网页 / 浅色桌面）上白字会看不清，这里垫一层淡深色 */
+  background: linear-gradient(160deg, rgba(16, 22, 36, 0.34), rgba(16, 22, 36, 0.20));
+}
+.m-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.m-art {
+  flex: 0 0 auto;
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  border-radius: 12px;
+  overflow: hidden;
+  color: #fff;
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.30), rgba(255, 255, 255, 0.12));
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  box-shadow: 0 2px 8px rgba(8, 12, 22, 0.22);
+}
+.m-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.m-art svg { opacity: 0.92; }
+.m-meta { min-width: 0; flex: 1 1 auto; }
+.m-title {
+  font-size: 13.5px; font-weight: 700; line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.m-artist {
+  font-size: 10.5px; color: var(--ink-dim); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.m-line { display: flex; align-items: center; gap: 8px; }
+.m-t { font-size: 9.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+/* 进度条只做展示：不能拖、不能点，鼠标移上去也没有小手 */
+.m-bar {
+  flex: 1 1 auto; height: 4px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  overflow: hidden; cursor: default;
+}
+.m-fill {
+  width: 0%; height: 100%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  transition: width 240ms linear;
+}
+.m-bar.empty .m-fill { transition: none; }
+
+.m-btns { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.m-btn {
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease, opacity 150ms ease;
+}
+.m-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.30); }
+.m-btn:active:not(:disabled) { transform: scale(0.94); }
+.m-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.m-btn.main {
+  width: 38px; height: 38px;
+  background: rgba(255, 255, 255, 0.30);
+  border-color: rgba(255, 255, 255, 0.40);
+}
+
+/* 音量：控的是 QQ 音乐自己那一档（系统「音量合成器」里的同一根滑杆） */
+.m-vol { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.m-vol-ico { flex: 0 0 auto; color: rgba(255, 255, 255, 0.82); }
+/* 滑杆本体高 16px（好点中），真正显示的细条只有 4px 高 */
+.m-vol-range {
+  -webkit-appearance: none; appearance: none;
+  flex: 1 1 auto; height: 16px; min-width: 0;
+  background: transparent;
+  outline: none; cursor: pointer;
+}
+.m-vol-range::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.26);
+}
+.m-vol-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 11px; height: 11px; border-radius: 50%;
+  margin-top: -3.5px;
+  background: #fff; border: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+}
+.m-vol-range:disabled { opacity: 0.42; cursor: not-allowed; }
+.m-vol-t {
+  flex: 0 0 auto; width: 26px; text-align: right;
+  font-size: 9.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums;
+}
+
+/* ---------------- 壁纸模块（Wallpaper Engine） ---------------- */
+.mod.wall {
+  align-items: stretch; justify-content: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  background: linear-gradient(160deg, rgba(16, 22, 36, 0.34), rgba(16, 22, 36, 0.20));
+  min-width: 0; overflow: hidden;
+}
+.w-bar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.w-cur {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 10.5px; font-weight: 700; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.w-acts { display: flex; gap: 4px; flex: 0 0 auto; }
+.w-btn {
+  font-size: 9px; color: #fff; cursor: pointer;
+  padding: 3px 6px; border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  background: rgba(255, 255, 255, 0.16);
+  transition: background 140ms ease;
+  white-space: nowrap;
+}
+.w-btn:hover { background: rgba(255, 255, 255, 0.30); }
+
+.w-grid {
+  flex: 1 1 auto; min-height: 0; min-width: 0; width: 100%;
+  overflow-y: auto; overflow-x: hidden;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding-right: 3px;
+  align-content: start;
+}
+.w-grid::-webkit-scrollbar { width: 5px; }
+.w-grid::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.35); border-radius: 999px; }
+.w-grid::-webkit-scrollbar-track { background: transparent; }
+
+.w-item {
+  position: relative;
+  cursor: pointer;
+  border-radius: 8px; overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.10);
+  transition: transform 140ms ease, border-color 140ms ease;
+  height: 58px;
+  display: flex; flex-direction: column;
+}
+.w-item:hover { transform: translateY(-1px); border-color: rgba(255, 255, 255, 0.55); }
+.w-item img { width: 100%; height: 44px; object-fit: cover; display: block; flex: 0 0 auto; }
+.w-item .w-nm {
+  font-size: 8.5px; color: #fff; line-height: 12px; height: 12px;
+  padding: 0 4px; flex: 0 0 auto;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.w-item.cur { border-color: #fff; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.55) inset; }
+.w-item.cur::after {
+  content: '当前';
+  position: absolute; top: 3px; right: 3px;
+  font-size: 8px; color: #10141d;
+  background: #fff; border-radius: 5px;
+  padding: 1px 4px;
+}
+.w-empty { font-size: 10px; color: var(--ink-dim); padding: 8px; }
+
+/* ---------------- 底部 ---------------- */
+.ftr {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 9.5px; color: rgba(247, 249, 255, 0.55);
+  padding-top: 4px;
+}
+
+/* ---------------- 悬浮按钮（绝对定位，不占文档流） ---------------- */
+.icon-btn {
+  position: absolute;
+  top: 10px;
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease;
+  will-change: transform;
+}
+.icon-btn:hover { background: rgba(255, 255, 255, 0.30); }
+.icon-btn:active { transform: scale(0.94); }
+.close { right: 10px; }
+.gear  { right: 42px; }
+.back  { right: 42px; }
+.gear.is-on { background: rgba(255, 255, 255, 0.42); }
+
+/* ---------------- 设置浮层（绝对定位，盖在内容上，不挤压布局） ---------------- */
+.settings {
+  position: absolute;
+  top: 44px; left: 12px; right: 12px;
+  padding: 11px 12px 9px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  background: linear-gradient(160deg, rgba(26, 32, 46, 0.90), rgba(18, 24, 36, 0.94));
+  box-shadow: 0 12px 30px rgba(8, 12, 20, 0.34);
+  color: var(--ink);
+  z-index: 6;
+  transform-origin: 90% 0%;
+  opacity: 0; transform: scale(0.96) translateY(-4px);
+  transition: opacity 180ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+.settings.is-on { opacity: 1; transform: none; pointer-events: auto; }
+.settings[hidden] { display: block; }   /* 用 class 控制显隐，避免 display 抖动 */
+
+.row { display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; }
+.rname { color: var(--ink-dim); }
+.rval { font-variant-numeric: tabular-nums; }
+
+.range {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 18px; margin: 3px 0 7px;
+  background: transparent; cursor: pointer;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 3px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.20));
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px; height: 13px; margin-top: -4.5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30);
+}
+.hint { font-size: 9px; color: rgba(247, 249, 255, 0.5); line-height: 1.35; }
+
+/* 深色系统下稍微加深一点，避免白得刺眼 */
+.dark .glass { border-color: rgba(255, 255, 255, 0.28); }
+
+/* ===================================================================
+   v2.1 · 自动反色（秒切，不跑 JS）
+   原理：文字/图标全部用白色，再叠一层 mix-blend-mode: difference。
+        浏览器在合成这一帧时就完成“取反”——背景亮，白字变黑；
+        背景暗，白字保持白。没有采样、没有定时器，所以不存在延迟。
+   注意：只作用在“字和图标”这一层，卡片底色不参与混合。
+   =================================================================== */
+.t1, .t2, .ftr, .ico, .cell .ico {
+  color: #fff;
+  mix-blend-mode: difference;
+  text-shadow: none;
+}
+
+/* 四宫格：改用“淡淡的深色玻璃 + 白字”。
+   这样不管背后是亮是暗，字都读得清，而且完全不需要判断/计算 → 天然零延迟。 */
+.cell {
+  background: linear-gradient(160deg, rgba(16, 22, 36, 0.24), rgba(16, 22, 36, 0.11));
+  border-color: rgba(255, 255, 255, 0.30);
+}
+.cell:hover { background: linear-gradient(160deg, rgba(16, 22, 36, 0.30), rgba(16, 22, 36, 0.17)); }
+.ct, .cs { color: #fff; text-shadow: 0 1px 2px rgba(6, 10, 18, 0.45); }
+
+/* 工作区里是“实心卡片”，底色本身就是浅色玻璃，所以这里用固定的深色字，
+   保证任何背景、任何亮度下都读得清（不需要猜，也就没有延迟）。 */
+.mod-ico, .mod-title, .mod-sub {
+  color: #0d121b;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* ===================================================================
+   v2.1 · 彻底去掉“方形脏影”
+   外阴影在透明窗口里根本画不出窗口边界，只会被窗口裁成一块方块，
+   所以外阴影全部删掉，只保留内侧高光（玻璃的厚度感靠它）。
+   =================================================================== */
+.glass {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* ===================================================================
+   v2.1 · “工作区”浮起来
+   层 2 那块真正干活的地方（.mod）要有自己的边和影，
+   一眼能和外面的空白/容器区分开：这里是实心工作区，那里是能退出的空白。
+   =================================================================== */
+.mod {
+  border: 1px solid rgba(255, 255, 255, 0.44);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.10));
+  box-shadow:
+    0 8px 22px rgba(6, 10, 20, 0.16),          /* 轻微外阴影：浮起来 */
+    0 1px 0 rgba(255, 255, 255, 0.55) inset,   /* 上边缘高光 */
+    0 -10px 18px rgba(255, 255, 255, 0.05) inset;
+}
+
+/* 旧的“手动反色”开关留空，避免老代码引用时报错 */
+.glass.ink-dark {}
+
+/* ---------------- 快捷启动模块 ---------------- */
+/* 手机桌面那种感觉：一格格图标 + 名字，4 列，多了就上下滚。
+   卡片底色和音乐/壁纸统一成淡深色，白字才压得住亮桌面。 */
+.mod.launch {
+  align-items: stretch; justify-content: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  background: linear-gradient(160deg, rgba(16, 22, 36, 0.34), rgba(16, 22, 36, 0.20));
+  min-width: 0; overflow: hidden;
+}
+.l-bar { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-width: 0; }
+.l-hint {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 10px; color: rgba(255, 255, 255, 0.78);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.l-add {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  color: #fff; cursor: pointer;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.18);
+  transition: background 140ms ease, transform 140ms ease;
+}
+.l-browse {
+  flex: 0 0 auto;
+  height: 22px; padding: 0 8px;
+  font: inherit; font-size: 10px; color: #fff; cursor: pointer;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.18);
+  white-space: nowrap;
+  transition: background 140ms ease, transform 140ms ease;
+}
+.l-browse:hover { background: rgba(255, 255, 255, 0.32); }
+.l-browse:active { transform: scale(0.96); }
+.l-add:hover { background: rgba(255, 255, 255, 0.32); }
+.l-add:active { transform: scale(0.92); }
+
+.l-grid {
+  flex: 1 1 auto; min-height: 0; min-width: 0; width: 100%;
+  overflow-y: auto; overflow-x: hidden;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding-right: 3px;
+  align-content: start;
+}
+.l-grid::-webkit-scrollbar { width: 5px; }
+.l-grid::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.35); border-radius: 999px; }
+.l-grid::-webkit-scrollbar-track { background: transparent; }
+
+.l-item {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 7px 3px 5px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 130ms ease, border-color 130ms ease, transform 130ms ease;
+  -webkit-user-drag: element;
+}
+.l-item:hover { background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.26); }
+.l-item:active { transform: scale(0.96); }
+.l-item.dragging { opacity: 0.45; }
+.l-item.over { border-color: rgba(255, 255, 255, 0.62); background: rgba(255, 255, 255, 0.22); }
+
+.l-ico {
+  width: 40px; height: 40px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 10px;
+  overflow: hidden;
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.10);
+}
+.l-ico img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.l-ico.fallback {
+  font-size: 16px; font-weight: 700; color: #fff;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.16));
+}
+.l-name {
+  width: 100%;
+  font-size: 9.5px; color: #fff; text-align: center;
+  line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(6, 10, 18, 0.5);
+}
+
+/* 删除：默认不显示，鼠标放上去才浮出来，避免误点 */
+.l-del {
+  position: absolute; top: 1px; right: 1px;
+  width: 15px; height: 15px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; line-height: 1;
+  color: #fff; cursor: pointer;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background: rgba(12, 18, 30, 0.62);
+  opacity: 0; transform: scale(0.8);
+  transition: opacity 130ms ease, transform 130ms ease;
+}
+.l-item:hover .l-del { opacity: 1; transform: scale(1); }
+.l-del:hover { background: rgba(214, 62, 62, 0.9); }
+
+.l-empty {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; text-align: center;
+}
+.l-empty[hidden] { display: none; }
+.l-empty-t { font-size: 12px; font-weight: 700; color: #fff; }
+.l-empty-s { font-size: 10px; color: rgba(255, 255, 255, 0.72); }
+
+/* ---------- 通知：红点角标 + 列表 ---------- */
+.cell-badge {
+  position: absolute; top: 8px; right: 8px;
+  min-width: 15px; height: 15px; padding: 0 4px;
+  border-radius: 8px;
+  background: #e5484d;
+  color: #fff; font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center;
+  box-shadow: 0 1px 4px rgba(150, 20, 24, 0.45);
+  pointer-events: none;
+}
+.cell-badge[hidden] { display: none; }
+
+.mod.notify {
+  background: linear-gradient(160deg, rgba(16, 22, 36, 0.34), rgba(16, 22, 36, 0.20));
+}
+
+.n-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.n-hint { font-size: 10px; color: rgba(255, 255, 255, 0.72); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.n-clear {
+  flex: 0 0 auto;
+  padding: 3px 9px; border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff; font: inherit; font-size: 10px; cursor: pointer;
+}
+.n-clear:hover { background: rgba(255, 255, 255, 0.22); }
+.n-clear:active { transform: scale(0.96); }
+
+.n-list { flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; padding-right: 2px; }
+.n-list::-webkit-scrollbar { width: 4px; }
+.n-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.24); border-radius: 2px; }
+
+.n-item {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 24px 6px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.10);
+  cursor: pointer;
+}
+.n-item:hover { background: rgba(255, 255, 255, 0.16); }
+.n-top { display: flex; align-items: baseline; gap: 6px; }
+.n-app {
+  font-size: 9.5px; font-weight: 700; color: #fff;
+  max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.n-ts { font-size: 9px; color: rgba(255, 255, 255, 0.55); margin-left: auto; }
+.n-txt { font-size: 10px; color: rgba(255, 255, 255, 0.88); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.n-txt .n-title { font-weight: 700; color: #fff; }
+.n-txt .n-sep { color: rgba(255, 255, 255, 0.45); }
+.n-del {
+  position: absolute; top: 4px; right: 4px;
+  width: 15px; height: 15px; padding: 0;
+  border-radius: 50%; border: none;
+  background: transparent; color: rgba(255, 255, 255, 0.7);
+  font-size: 12px; line-height: 15px; text-align: center; cursor: pointer;
+}
+.n-del:hover { background: rgba(214, 62, 62, 0.9); color: #fff; }
+
+.n-empty {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 5px; text-align: center; padding: 0 14px;
+}
+.n-empty[hidden] { display: none; }
+.n-empty-t { font-size: 12px; font-weight: 700; color: #fff; }
+.n-empty-s { font-size: 9.5px; color: rgba(255, 255, 255, 0.66); line-height: 1.45; }

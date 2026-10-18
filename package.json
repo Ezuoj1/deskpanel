@@ -1,0 +1,27 @@
+{
+  "name": "deskpanel",
+  "productName": "右上角控制台",
+  "version": "0.1.0",
+  "description": "Windows 右上角悬浮控制台：快捷启动 / QQ 音乐控制 / Wallpaper Engine 壁纸 / 系统通知",
+  "main": "src/main/main.js",
+  "license": "MIT",
+  "author": "DeskPanel contributors",
+  "keywords": [
+    "electron",
+    "windows",
+    "desktop",
+    "launcher",
+    "smtc",
+    "wallpaper-engine"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "electron .",
+    "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File native/build.ps1"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7"
+  }
+}

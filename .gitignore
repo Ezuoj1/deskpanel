@@ -1,0 +1,18 @@
+# 依赖与产物
+node_modules/
+
+# 本机测试截图 / 调试日志（不随仓库走）
+shots/
+*.log
+dp-*.txt
+deskpanel-*.cmd
+deskpanel-*.vbs
+
+# 编译产物（用 native/build.ps1 现场编译）
+native/*.exe
+native/*.dll
+
+# 系统垃圾
+Thumbs.db
+.DS_Store
+desktop.ini
