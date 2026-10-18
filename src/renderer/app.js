@@ -207,6 +207,30 @@ if (KIND === 'panel') {
 
   // 从背景画面里取一小块算平均亮度，决定用深色字还是白色字。
   // 优先用实时视频；实时关掉时用主进程拍的静态底图（两者都代表“面板背后是什么”）。
+  // 判定结果直接落到 body 的 .on-light 上——字、图标、卡片底、描边一起换，
+  // 不会出现“字变黑了但图标还是白的”这种半截状态。
+  const LUMA_LIGHT = 0.55;   // 取 65 分位的亮度，超过它就换深色字
+  function applyTone(luma) {
+    const light = luma > LUMA_LIGHT;
+    if (document.body.classList.contains('on-light') === light) return;
+    document.body.classList.toggle('on-light', light);
+    log('[tone] 背景亮度', luma.toFixed(2), light ? '→ 深色字' : '→ 白色字');
+  }
+
+  // 平均亮度会被“一大片黑窗框”拉低（黑白壁纸就是典型），导致明明背景很亮却判定成暗。
+  // 改用 65 分位亮度：只要“相当一部分区域是亮的”就按亮背景处理，字更稳。
+  function toneLuma(ctx, w, h) {
+    const px = ctx.getImageData(0, 0, w, h).data;
+    const arr = [];
+    for (let i = 0; i < px.length; i += 4 * 7) {
+      arr.push(0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]);
+    }
+    if (!arr.length) return 0.5;
+    arr.sort((a, b) => a - b);
+    const idx = Math.min(arr.length - 1, Math.floor(arr.length * 0.65));
+    return arr[idx] / 255;
+  }
+
   function sampleInk() {
     const useLive = glass.classList.contains('is-live') && live.videoWidth;
     const bd = document.querySelector('.backdrop');
@@ -217,11 +241,8 @@ if (KIND === 'panel') {
       c.width = 32; c.height = 24;
       const ctx = c.getContext('2d', { willReadFrequently: true });
       ctx.drawImage(useLive ? live : bd, 0, 0, 32, 24);
-      const px = ctx.getImageData(0, 0, 32, 24).data;
-      let sum = 0;
-      for (let i = 0; i < px.length; i += 4) sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
-      const luma = sum / (px.length / 4) / 255;
-      glass.classList.toggle('ink-dark', luma > 0.62);
+      const luma = toneLuma(ctx, 32, 24);
+      applyTone(luma);
       log('背景平均亮度', luma.toFixed(2), useLive ? '(live)' : '(backdrop)');
     } catch (e) { log('取样失败', e.message); }
   }
@@ -294,6 +315,15 @@ if (KIND === 'panel') {
     wallpaper: { title: '壁纸', sub: 'Wallpaper Engine' },
     notify: { title: '通知', sub: '授权 / 脱敏列表' },
   };
+
+  // 整个控制台一收起（Esc / 点外部 / 快捷键 / 点 ✕），内部状态必须强制回到“主四宫格”。
+  // 否则下次呼出会残留上次的设置面板、或者某个放大的工作区。
+  // 放在 collapsed（窗口已经 hide 之后）执行：这时看不见，切换不会有跳变。
+  function resetView() {
+    if (settingsOpen) toggleSettings(false);
+    if (level !== 1) goLevel(1);
+    log('[reset] 收起后视图重置为四宫格');
+  }
 
   function goLevel(n, mod) {
     level = n;
@@ -1180,13 +1210,9 @@ if (KIND === 'panel') {
           ctx.drawImage(c, Math.round(bandX - srcW), Math.round(dstY), srcW, Math.round(dstH),
             Math.round(dstX), Math.round(dstY), Math.round(w - dstX), Math.round(dstH));
 
-          // 平均亮度只做日志：字的颜色现在由 CSS mix-blend-mode: difference 自动决定，
-          // 不再靠 JS 每帧算，所以这里不再切 ink-dark（切了反而会慢半拍）。
-          const sw = Math.max(1, Math.round(w * 0.7)), sh = Math.max(1, Math.round(h * 0.7));
-          const px = ctx.getImageData(0, 0, sw, sh).data;
-          let sum = 0;
-          for (let i = 0; i < px.length; i += 4) sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
-          const luma = sum / (px.length / 4) / 255;
+          // 亮度：决定整套配色（字/图标/卡片底一起换），不是只切字色。
+          const luma = toneLuma(ctx, w, h);
+          applyTone(luma);
           log('backdrop 平均亮度', luma.toFixed(2));
 
           backdrop.src = c.toDataURL('image/jpeg', 0.9);
@@ -1206,15 +1232,20 @@ if (KIND === 'panel') {
       //     而玻璃又是半透明的 → 自己拍自己，会造成“一闪一闪”的反馈闪烁；
       //   · 静态底图是面板还没显示时拍的，没有自拍，动画期间也不会有任何逐帧变化。
       setLiveEnabled(state === 'collapsed');
-      // 四个工作区卡片的二次入场：外框展开（EXPAND_MS）结束后再等一会儿才开始
+      // 四个工作区卡片的二次入场。
+      // 只调“外框→卡片”的这一段等待：外框 320ms，让卡片在 200ms 就开始起跳，
+      // 也就是外框还没完全撑满、卡片已经紧跟着弹出来，中间不留空档。
+      // （每张卡片自己的时长/曲线、以及卡片之间的错峰都没动。）
       if (state === 'expanded') {
         document.body.classList.remove('cards-in');
         requestAnimationFrame(() => {
-          document.documentElement.style.setProperty('--cards-delay', (EXPAND_MS + 160) + 'ms');
+          document.documentElement.style.setProperty('--cards-delay', '200ms');
           document.body.classList.add('cards-in');
         });
       } else if (state === 'collapsing') {
         document.body.classList.remove('cards-in');
+      } else if (state === 'collapsed') {
+        resetView();
       }
       if (state === 'expanded') animateOpen();
       else if (state === 'collapsing') animateClose();

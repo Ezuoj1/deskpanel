@@ -548,8 +548,22 @@ async function expand({ focus = true, reason = 'click' } = {}) {
   expandingAt = t0;
   log('[expand]', reason);
 
+  // 背景必须是“按下快捷键这一瞬间”的画面：
+  // 之前是拿“上一次收起后 260ms 拍的缓存”，所以切了窗口再呼出，看到的还是上一张（滞后一张）。
+  // 现在每次展开都先抓一张新的；抓的时候面板还没显示，画面里没有自己，是干净的。
+  // 为了不让快捷键明显变慢：缓存还新鲜（<250ms）就直接用，否则等这一张（一般 60~150ms）。
+  const bdAge = Date.now() - backdropAt;
+  let freshShot = '';
+  if (!backdropCache || bdAge > 250) {
+    const tc = Date.now();
+    freshShot = await Promise.race([
+      grabBackdrop(),
+      new Promise((r) => setTimeout(() => r(''), 450)),
+    ]);
+    log('[backdrop] 展开前重抓', (Date.now() - tc) + 'ms', freshShot ? 'ok' : '超时/失败');
+  }
+
   // 先让窗口出来，绝不为了等截图把展开卡住。
-  // 底图有缓存就先垫上，没缓存就等抓完再补（抓完会单独推给页面）。
   panelWin.setIgnoreMouseEvents(false);
   panelWin.setAlwaysOnTop(true, 'screen-saver');
   panelWin.setBounds(computeBounds().panel);
@@ -563,14 +577,14 @@ async function expand({ focus = true, reason = 'click' } = {}) {
   clearTimeout(stripHideTimer);
   stripHideTimer = setTimeout(() => { if (state !== 'collapsed' && stripWin) stripWin.hide(); }, 170);
 
-  if (backdropCache) {
-    panelWin.webContents.send('view:backdrop', { data: backdropCache });
+  const shotNow = freshShot || backdropCache;
+  if (shotNow) {
+    panelWin.webContents.send('view:backdrop', { data: shotNow });
   }
   log('[timing] 窗口出现耗时', (Date.now() - t0) + 'ms');
 
-  // 只有完全没有底图时才当场抓一张（抓的时候面板还没盖上去，不会有自拍）。
-  // 平时都在“收起之后”偷偷刷新，这样面板显示期间底图不会中途换图 —— 不会闪。
-  if (!backdropCache) {
+  // 完全没底图（极端情况：抓屏一直失败）才在显示后补一次。
+  if (!shotNow) {
     grabBackdrop().then((shot) => {
       if (shot && panelWin && !panelWin.isDestroyed() && state !== 'collapsed') {
         panelWin.webContents.send('view:backdrop', { data: shot });

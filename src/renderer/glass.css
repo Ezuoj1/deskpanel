@@ -1,4 +1,4 @@
-/* =====================================================================
+﻿/* =====================================================================
    右上角控制台 · 样式  v1.9
    设计要点：
    1) 玻璃 = 一张“背后桌面的模糊照片” + 一层染色 + 一条高光，全部装在 .glass 里；
@@ -85,12 +85,15 @@ body.is-strip { background: transparent; }
   overflow: hidden;
   will-change: transform, opacity;
   contain: paint;
-  border: 1px solid var(--stroke);
+  border: 0;
+  outline: none;
   /* 只保留“内高光”，不留任何外阴影：
      外面那层大黑影在浅色桌面上会像一块方形脏底，圆角也压不干净。 */
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.65),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.12);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 0 26px rgba(8, 12, 20, 0.10);
   background: transparent;
 }
 
@@ -721,12 +724,6 @@ body.dock-instant .glass { transition: none !important; }
    外阴影在透明窗口里根本画不出窗口边界，只会被窗口裁成一块方块，
    所以外阴影全部删掉，只保留内侧高光（玻璃的厚度感靠它）。
    =================================================================== */
-.glass {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.62),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.10),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-}
 
 /* ===================================================================
    v2.1 · “工作区”浮起来
@@ -929,3 +926,68 @@ body.dock-instant .glass { transition: none !important; }
 .n-empty[hidden] { display: none; }
 .n-empty-t { font-size: 12px; font-weight: 700; color: #fff; }
 .n-empty-s { font-size: 9.5px; color: rgba(255, 255, 255, 0.66); line-height: 1.45; }
+
+/* ===================================================================
+   v3.1 · 浅背景下的整套配色（body.on-light）
+   背景很亮时（白网页、浅色壁纸），白字白卡根本读不清，所以整块换成
+   「浅玻璃 + 深字」。开关由 app.js 的 applyTone() 根据截图亮度切换。
+   =================================================================== */
+body.on-light {
+  --ink: #0d121b;
+  --ink-dim: rgba(13, 18, 27, 0.62);
+  --stroke: rgba(13, 20, 32, 0.18);
+  --stroke-soft: rgba(13, 20, 32, 0.10);
+}
+
+/* 深字要配浅描边，否则描边会像脏边 */
+body.on-light .content { text-shadow: 0 1px 2px rgba(255, 255, 255, 0.60); }
+
+/* 卡片 */
+body.on-light .cell {
+  border-color: rgba(13, 20, 32, 0.10);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.52));
+}
+body.on-light .cell:hover {
+  border-color: rgba(13, 20, 32, 0.18);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.90), rgba(255, 255, 255, 0.66));
+}
+body.on-light .cell .ico { color: #0d121b; }
+body.on-light .cell .ct { color: #0d121b; }
+body.on-light .cell .cs { color: rgba(13, 18, 27, 0.62); }
+
+/* 空槽位 */
+body.on-light .cell.empty {
+  border-color: rgba(13, 20, 32, 0.20);
+  background: rgba(255, 255, 255, 0.30);
+  color: rgba(13, 18, 27, 0.42);
+}
+body.on-light .cell.empty:hover {
+  border-color: rgba(13, 20, 32, 0.28);
+  background: rgba(255, 255, 255, 0.42);
+}
+body.on-light .cell.empty .cs { color: rgba(13, 18, 27, 0.40); }
+
+/* 右上角齿轮 / 收起 */
+body.on-light .icon-btn {
+  color: #0d121b;
+  background: rgba(255, 255, 255, 0.55);
+  border-color: rgba(13, 20, 32, 0.14);
+}
+body.on-light .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(13, 20, 32, 0.22);
+}
+
+/* 底部手柄：浅底上要压一个淡灰底，才看得出那个箭头 */
+body.on-light .dock-chev {
+  background: rgba(13, 20, 32, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(13, 20, 32, 0.12);
+}
+body.on-light .dock-bar:hover .dock-chev { background: rgba(13, 20, 32, 0.20); }
+
+/* 右下角提示 / 扩展区提示 / 设置里的说明文字 */
+body.on-light .ftr-hint { color: rgba(13, 18, 27, 0.60); }
+body.on-light .hint { color: rgba(13, 18, 27, 0.55); }
+body.on-light .switch .txt { color: rgba(13, 18, 27, 0.62); }
+body.on-light .switch .txt b { color: #0d121b; }
+body.on-light .dock-hint { color: rgba(13, 18, 27, 0.55); }
