@@ -229,10 +229,19 @@ if (KIND === 'panel') {
   }
 
   // ---------- 展开 / 收起动画（只动 transform + opacity） ----------
+  // 起始偏移要按“当前窗口实际高度”现算：扩展坞展开后窗口是 434 高，
+  // 还用写死的 268 算，缩小的那块就落不到窄条中心、动画会歪。
+  function dynDY0() {
+    const w = window.innerWidth || PANEL_W;
+    const h = window.innerHeight || PANEL_H;
+    const s0 = STRIP_W / w;
+    return (STRIP_TOP - TOP_GAP) + STRIP_H / 2 - (h * s0) / 2;
+  }
+
   function animateOpen() {
     if (current) current.cancel();
     current = glass.animate([
-      { transform: `translateY(${DY0}px) scale(${S0})`, opacity: 0, borderRadius: '12px' },
+      { transform: `translateY(${dynDY0()}px) scale(${STRIP_W / (window.innerWidth || PANEL_W)})`, opacity: 0, borderRadius: '12px' },
       { transform: 'translateY(0px) scale(1)', opacity: 1, borderRadius: '20px' },
     ], {
       duration: EXPAND_MS,
@@ -250,7 +259,7 @@ if (KIND === 'panel') {
     if (current) current.cancel();
     current = glass.animate([
       { transform: 'translateY(0px) scale(1)', opacity: 1, borderRadius: '20px' },
-      { transform: `translateY(${DY0}px) scale(${S0})`, opacity: 0, borderRadius: '12px' },
+      { transform: `translateY(${dynDY0()}px) scale(${STRIP_W / (window.innerWidth || PANEL_W)})`, opacity: 0, borderRadius: '12px' },
     ], {
       duration: COLLAPSE_MS,
       easing: 'cubic-bezier(0.4, 0, 0.7, 0.2)',
@@ -816,6 +825,181 @@ if (KIND === 'panel') {
   });
 
   btnBack.addEventListener('click', (e) => { e.stopPropagation(); goLevel(1); });
+
+  // ---------- 扩展坞 + 槽位（本次结构升级） ----------
+  // 设计要点：
+  //   · 四宫格仍然是“主槽位”，固定 4 个位置；模块被挪走后原地留虚线空卡，不许后面的格子顶上。
+  //   · 扩展区里的格子复用 .cell 本身（同一个 DOM 元素，只是 appendChild 换个爹），
+  //     所以点击、拖拽、红点这些监听一个都不会丢。
+  //   · 动画分两层：主进程改窗口高度（只有 Y 变），页面改 .dock-area 的高度（CSS 190ms）。
+  const dockEl = document.getElementById('dock');
+  const dockBar = document.getElementById('dock-bar');
+  const l1Grid = document.getElementById('l1-grid');
+  const dockGrid = document.getElementById('dock-grid');
+  const slotsEl = document.getElementById('slots');
+  const cCustomBg = document.getElementById('c-custombg');
+  const vCustomBg = document.getElementById('v-custombg');
+  const tCustomBg = document.getElementById('t-custombg');
+
+  // 模块登记表：id 与 data-module 对应，element 就是页面上原来那个 button
+  const REGISTRY = Array.from(document.querySelectorAll('.cell'))
+    .filter((el) => el.dataset && el.dataset.module)
+    .map((el) => {
+      const ct = el.querySelector('.ct');
+      return { id: el.dataset.module, title: ct ? ct.textContent : el.dataset.module, el };
+    });
+  const MODULE_IDS = REGISTRY.map((r) => r.id);
+
+  // 默认排法：四个都在主槽位，扩展区空着（跟升级前一模一样）
+  let slots = { main: MODULE_IDS.slice(0, 4), dock: [] };
+  let dockOpen = false;
+
+  function makeEmptySlot() {
+    const d = document.createElement('div');
+    d.className = 'cell empty';
+    d.innerHTML = '<span class="cs">空槽位</span>';
+    return d;
+  }
+
+  function paintSlots() {
+    const byId = new Map(REGISTRY.map((r) => [r.id, r]));
+    if (l1Grid) {
+      l1Grid.innerHTML = '';
+      for (let i = 0; i < 4; i += 1) {
+        const id = slots.main[i];
+        l1Grid.appendChild(id && byId.has(id) ? byId.get(id).el : makeEmptySlot());
+      }
+    }
+    if (dockGrid) {
+      dockGrid.innerHTML = '';
+      if (!slots.dock.length) {
+        const hint = document.createElement('div');
+        hint.className = 'dock-hint';
+        hint.textContent = '扩展区还空着 · 设置 → 模块放在哪';
+        dockGrid.appendChild(hint);
+      } else {
+        slots.dock.forEach((id) => { if (byId.has(id)) dockGrid.appendChild(byId.get(id).el); });
+      }
+    }
+  }
+
+  // 主进程回来的槽位数据一律过一遍：非法 id 丢掉、同一模块只留第一次出现
+  function applySlots(raw) {
+    if (!raw || typeof raw !== 'object') return;
+    const seen = new Set();
+    const main = [];
+    for (let i = 0; i < 4; i += 1) {
+      const id = Array.isArray(raw.main) ? raw.main[i] : null;
+      if (id && MODULE_IDS.includes(id) && !seen.has(id)) { seen.add(id); main.push(id); }
+      else main.push(null);
+    }
+    const dock = [];
+    (Array.isArray(raw.dock) ? raw.dock : []).forEach((id) => {
+      if (id && MODULE_IDS.includes(id) && !seen.has(id)) { seen.add(id); dock.push(id); }
+    });
+    slots = { main, dock };
+    paintSlots();
+    buildSlotSelects();
+  }
+
+  function persistSlots() {
+    if (API && API.slotsSet) API.slotsSet(slots).catch(() => {});
+  }
+
+  function buildSlotSelects() {
+    if (!slotsEl) return;
+    slotsEl.innerHTML = '';
+    REGISTRY.forEach((r) => {
+      const row = document.createElement('div');
+      row.className = 'slot-row';
+      const name = document.createElement('span');
+      name.className = 'sname';
+      name.textContent = r.title;
+      const sel = document.createElement('select');
+      sel.className = 'slot-sel';
+      [['main:0', '主槽位 1'], ['main:1', '主槽位 2'], ['main:2', '主槽位 3'], ['main:3', '主槽位 4'], ['dock', '扩展区']]
+        .forEach(([v, t]) => {
+          const op = document.createElement('option');
+          op.value = v; op.textContent = t;
+          sel.appendChild(op);
+        });
+      const cur = slots.main.indexOf(r.id);
+      sel.value = cur >= 0 ? 'main:' + cur : 'dock';
+      sel.addEventListener('change', () => assign(r.id, sel.value));
+      row.appendChild(name);
+      row.appendChild(sel);
+      slotsEl.appendChild(row);
+    });
+  }
+
+  // 把某个模块放到目标位置；目标位置上原本的人被挤到扩展区（不让他凭空消失）
+  function assign(id, target) {
+    const from = slots.main.indexOf(id);
+    if (from >= 0) slots.main[from] = null;
+    else slots.dock = slots.dock.filter((x) => x !== id);
+    if (target === 'dock') {
+      if (!slots.dock.includes(id)) slots.dock.push(id);
+    } else {
+      const idx = Number(String(target).split(':')[1]) || 0;
+      const occupant = slots.main[idx];
+      slots.main[idx] = id;
+      if (occupant && occupant !== id && !slots.main.includes(occupant) && !slots.dock.includes(occupant)) {
+        slots.dock.push(occupant);
+      }
+    }
+    paintSlots();
+    buildSlotSelects();
+    persistSlots();
+  }
+
+  function paintDock(open) {
+    dockOpen = !!open;
+    if (dockEl) dockEl.classList.toggle('open', dockOpen);
+  }
+
+  if (dockBar) {
+    dockBar.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const want = !dockOpen;
+      paintDock(want);                       // 页面这边先动，主进程同时开始改窗口高度
+      if (API && API.setDock) API.setDock(want).catch(() => {});
+    });
+  }
+
+  // ---------- 自定义背景（这一版只存开关，不动颜色） ----------
+  let settingsListeners = [];
+  function onSettingsChanged(cb) { if (typeof cb === 'function') settingsListeners.push(cb); }
+  function emitSettings(patch) {
+    settingsListeners.forEach((cb) => { try { cb(patch); } catch (err) { log('settings listener 出错', err.message); } });
+  }
+  // 预留：以后要换底图/取色，都在这个函数里加，调用方不用改
+  function applyCustomBackground(on) {
+    const live = !!on;
+    document.body.classList.toggle('has-custom-bg', live);
+    emitSettings({ customBackground: live });
+  }
+
+  function paintCustomBg(on) {
+    const live = !!on;
+    if (cCustomBg) cCustomBg.checked = live;
+    if (vCustomBg) vCustomBg.textContent = live ? '已开启' : '已关闭';
+    if (tCustomBg) tCustomBg.textContent = live ? '已开启（底图替换还没接）' : '换自己的底图（下一步做取色 / 图片）';
+    applyCustomBackground(live);
+  }
+
+  if (cCustomBg) {
+    cCustomBg.addEventListener('change', () => {
+      const want = cCustomBg.checked;
+      paintCustomBg(want);
+      if (API && API.setSettings) API.setSettings({ customBackground: want });
+    });
+  }
+
+  // 先按默认四宫格铺一遍，别等 settings 回来才显示
+  paintSlots();
+  buildSlotSelects();
+  window.__slots = () => JSON.parse(JSON.stringify(slots));   // 调试用
+
   btnClose.addEventListener('click', (e) => { e.stopPropagation(); if (API) API.collapse('close-btn'); });
 
   // ---------- 内部 / 外部的严格分界 ----------
@@ -915,9 +1099,12 @@ if (KIND === 'panel') {
 
           // 窄条窗口正好落在面板的右侧边上，抓屏时会被一起拍进来。
           // 用左边几个像素横向拉伸，把那一竖条盖掉（后面还有 26px 模糊，看不出接缝）。
-          const kx = w / PANEL_W, ky = h / PANEL_H;
-          const bandX = (PANEL_W - STRIP_W - 4) * kx;
-          const dstX = (PANEL_W - STRIP_W) * kx;
+          // 注意用“当前视口”而不是写死的 380×268——扩展坞展开后高度会变。
+          const vw = window.innerWidth || PANEL_W;
+          const vh = window.innerHeight || PANEL_H;
+          const kx = w / vw, ky = h / vh;
+          const bandX = (vw - STRIP_W - 4) * kx;
+          const dstX = (vw - STRIP_W) * kx;
           const dstY = (STRIP_TOP - TOP_GAP) * ky;
           const dstH = STRIP_H * ky;
           const srcW = Math.max(2, Math.round(4 * kx));
@@ -973,7 +1160,12 @@ if (KIND === 'panel') {
     });
 
     API.getSettings().then((s) => {
-      if (s) applyLook(s.opacity, s.blur);
+      if (!s) return;
+      applyLook(s.opacity, s.blur);
+      paintDock(!!s.dockOpen);
+      paintCustomBg(!!s.customBackground);
+      if (s.slots) applySlots(s.slots);
+      if (s.features && s.features.dock === false && dockEl) dockEl.hidden = true;
     }).catch(() => {});
 
     API.info().then((i) => {

@@ -21,6 +21,13 @@ const DEBUG = process.argv.includes('--panel-debug') || process.argv.includes('-
 const AUTOMATION = process.argv.includes('--automation');
 
 const PANEL = { w: 380, h: 268 };
+// 扩展坞：四宫格下方那条带箭头的手柄（DOCK_BAR）+ 展开后露出的扩展区（DOCK_AREA）。
+// 关键：加手柄靠“把窗口加高 34px”腾地方，而不是压扁四宫格——
+// 这样四宫格的尺寸和位置跟以前一模一样，用户看到的扩展只是往下长出来。
+// 展开时同理，只加高 132px，宽度和顶部位置一个像素都不动。
+const DOCK_BAR = 34;
+const DOCK_AREA = 132;
+const PANEL_BASE_H = PANEL.h + DOCK_BAR;
 const STRIP = { w: 48, h: 140 };
 const EDGE = 8;
 const TOP_MARGIN = 25;
@@ -32,7 +39,35 @@ const COLLAPSE_MS = 260;
 // ---------------- 设置 ----------------
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 // openAtLogin 默认 true：这是“常驻桌面右上角”的工具，开机就该在。
-let settings = { opacity: 0.32, blur: 26, openAtLogin: true };
+// slots：主区 4 个槽位 + 扩展区若干；null 表示“还没排过”，由页面按默认四宫格填。
+// features.dock 是逃生开关：万一扩展坞出问题，改成 false 就退回纯四宫格。
+let settings = {
+  opacity: 0.32,
+  blur: 26,
+  openAtLogin: true,
+  customBackground: false,
+  dockOpen: false,
+  slots: null,
+  features: { dock: true },
+};
+
+function normalizeSlots(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const valid = ['launch', 'music', 'wallpaper', 'notify'];
+  const pick = (v) => (valid.includes(v) ? v : null);
+  const main = Array.isArray(raw.main) ? raw.main.slice(0, 4).map(pick) : [];
+  while (main.length < 4) main.push(null);
+  // 同一个模块不能同时出现在两个槽位里：以先出现的位置为准
+  const seen = new Set();
+  const dedupe = (id) => {
+    if (!id || seen.has(id)) return null;
+    seen.add(id);
+    return id;
+  };
+  const mainOut = main.map(dedupe);
+  const dock = Array.isArray(raw.dock) ? raw.dock.map(pick).map(dedupe) : [];
+  return { main: mainOut, dock };
+}
 
 function loadSettings() {
   let hasLoginFlag = false;
@@ -42,6 +77,10 @@ function loadSettings() {
     settings = { ...settings, ...raw };
   } catch { /* 第一次运行 */ }
   if (typeof settings.openAtLogin !== 'boolean') settings.openAtLogin = true;
+  if (typeof settings.customBackground !== 'boolean') settings.customBackground = false;
+  if (typeof settings.dockOpen !== 'boolean') settings.dockOpen = false;
+  settings.features = { dock: true, ...(settings.features && typeof settings.features === 'object' ? settings.features : {}) };
+  settings.slots = normalizeSlots(settings.slots);
   // 第一次跑（老版本 settings.json 里没有这个字段）：默认帮他打开开机自启；
   // 之后一律以 settings 为准，不再每次启动都去改注册表（否则用户从任务管理器关掉也会被我们改回来）。
   settingsNeedsLoginSync = !hasLoginFlag;
@@ -232,12 +271,41 @@ let grabbing = null;
 let stripHideTimer = null;
 
 // ---------------- 位置 ----------------
+// 扩展坞展开状态：窗口高度 = 基础高度（四宫格 + 手柄）+ 扩展区高度
+let dockOpen = false;
+let dockTimer = null;
+
+function panelHeight() {
+  return PANEL_BASE_H + (dockOpen ? DOCK_AREA : 0);
+}
+
 function computeBounds() {
   const wa = screen.getPrimaryDisplay().workArea;
   return {
     strip: { x: wa.x + wa.width - STRIP.w, y: wa.y + STRIP_TOP, width: STRIP.w, height: STRIP.h },
-    panel: { x: wa.x + wa.width - PANEL.w - EDGE, y: wa.y + TOP_MARGIN, width: PANEL.w, height: PANEL.h },
+    panel: { x: wa.x + wa.width - PANEL.w - EDGE, y: wa.y + TOP_MARGIN, width: PANEL.w, height: panelHeight() },
   };
+}
+
+// 抽屉式展开：只改高度，x / y / 宽度一个都不动 → 视觉上就是“从下面拉出来”。
+// 用 12 帧、每帧 16ms 的 setBounds 完成 190ms 动画，跟页面里 CSS 的 190ms 对齐。
+// （早年逐帧改尺寸掉过帧，那是因为每帧都在重抓磨砂底图；这里只在结束前抓一次。）
+function animatePanelHeight(target, done) {
+  if (!panelWin || panelWin.isDestroyed()) return;
+  const from = panelWin.getBounds().height;
+  const to = target.height;
+  if (from === to) { if (done) done(); return; }
+  const t0 = Date.now();
+  const dur = 190;
+  clearInterval(dockTimer);
+  dockTimer = setInterval(() => {
+    if (!panelWin || panelWin.isDestroyed()) { clearInterval(dockTimer); return; }
+    const k = Math.min(1, (Date.now() - t0) / dur);
+    const eased = 1 - Math.pow(1 - k, 3);            // ease-out cubic
+    const h = Math.round(from + (to - from) * eased);
+    panelWin.setBounds({ x: target.x, y: target.y, width: target.width, height: h });
+    if (k >= 1) { clearInterval(dockTimer); if (done) done(); }
+  }, 16);
 }
 
 // ---------------- 抓“背后桌面”做玻璃底图 ----------------
@@ -443,8 +511,36 @@ function createWindows() {
   hideOnClose(stripWin, 'strip');
 }
 
-// ---------------- 展开 / 收起 ----------------
-// 打开方式只有一种：点击窄条（或托盘/快捷键）。悬停自动展开已彻底删除。
+// ---------------- 扩展坞 ----------------
+// 页面点手柄 → 这里改窗口高度 → 页面自己同步播 CSS 过渡。
+// 顺序很重要：先算好目标高度再交给动画函数，避免中途被 computeBounds 反复重算。
+function setDock(open, { animate = true } = {}) {
+  const want = !!open;
+  if (want === dockOpen) return { ok: true, open: dockOpen, changed: false };
+  dockOpen = want;
+  settings.dockOpen = want;
+  saveSettings();
+  const b = computeBounds().panel;
+  log('[dock]', want ? '展开扩展区' : '收起扩展区', '→ 目标高度', b.height);
+  if (!panelWin || panelWin.isDestroyed()) return { ok: true, open: dockOpen, changed: true };
+  if (!animate) {
+    panelWin.setBounds(b);
+  } else {
+    animatePanelHeight(b);
+  }
+  // 高度一变，旧底图就裁短了；动画结束后重抓一张推给页面，玻璃才不会有拉伸感
+  setTimeout(() => {
+    if (!panelWin || panelWin.isDestroyed()) return;
+    grabBackdrop().then((shot) => {
+      if (shot && panelWin && !panelWin.isDestroyed()) {
+        panelWin.webContents.send('view:backdrop', { data: shot });
+      }
+    });
+  }, animate ? 250 : 40);
+  return { ok: true, open: dockOpen, changed: true };
+}
+
+// ---------------- 展开 / 收起 ----------------// 打开方式只有一种：点击窄条（或托盘/快捷键）。悬停自动展开已彻底删除。
 async function expand({ focus = true, reason = 'click' } = {}) {
   if (!panelWin || state === 'expanded') return;
   // 全屏应用正在跑：默认不出来（用户主动按快捷键/点托盘时才破例）
@@ -1061,6 +1157,17 @@ ipcMain.handle('env:info', () => {
 
 ipcMain.handle('settings:get', () => settings);
 
+// 扩展坞：展开 / 收起（高度动画在 setDock 里做，页面负责内容过渡）
+ipcMain.handle('panel:set-dock', (_e, open) => setDock(!!open));
+
+// 槽位分配：页面传 { main:[id|null×4], dock:[id…] }，主进程校验后落盘
+ipcMain.handle('slots:set', (_e, slots) => {
+  settings.slots = normalizeSlots(slots);
+  saveSettings();
+  log('[slots] 已保存', JSON.stringify(settings.slots));
+  return settings.slots;
+});
+
 // 开机自启：给页面里的开关用
 ipcMain.handle('login:get', () => loginState());
 ipcMain.handle('login:set', (_e, enabled) => {
@@ -1086,6 +1193,12 @@ ipcMain.on('settings:set', (_e, patch) => {
   const next = { ...settings, ...patch };
   if (typeof next.opacity === 'number') next.opacity = Math.max(0.05, Math.min(1, next.opacity));
   if (typeof next.blur === 'number') next.blur = Math.max(0, Math.min(40, next.blur));
+  if (typeof next.customBackground === 'boolean') next.customBackground = next.customBackground;
+  if (typeof next.openAtLogin === 'boolean') next.openAtLogin = next.openAtLogin;
+  // 槽位/扩展坞这类有结构的字段不允许从这条通道乱写，只走各自的 IPC
+  next.slots = settings.slots;
+  next.dockOpen = settings.dockOpen;
+  next.features = settings.features;
   settings = next;
   saveSettings();
   log('[settings] 已保存', JSON.stringify(settings));
@@ -1339,6 +1452,8 @@ if (!app.requestSingleInstanceLock()) {
 app.whenReady().then(() => {
   app.setAppUserModelId('com.deskpanel.app');
   loadSettings();
+  // 上次退出时扩展坞是开着的，这次展开就直接给到展开后的高度
+  dockOpen = !!settings.dockOpen;
   loadApps();
 
   // 开机自启：只有第一次运行（settings.json 里没这个字段）才自动写一次注册表，

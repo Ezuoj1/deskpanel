@@ -42,6 +42,7 @@
       <div class="stage">
         <!-- 层 1：四宫格 -->
         <section class="view l1 is-on" id="view-l1">
+          <div class="l1-grid" id="l1-grid">
           <button class="cell" data-module="launch">
             <span class="ico">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -81,6 +82,7 @@
             <span class="cs">QQ / 邮件 / Edge</span>
             <span class="cell-badge" id="n-badge" hidden>0</span>
           </button>
+          </div>
         </section>
 
         <!-- 层 2：单模块 -->
@@ -188,15 +190,43 @@
         <div class="hint">往左更通透（能看清后面的桌面），往右更实。</div>
 
         <div class="sep"></div>
-        <label class="row">
+        <div class="trow" title="开机时自动出现控制台">
           <span class="rname">开机自启</span>
-          <span class="rval" id="v-login">读取中…</span>
+          <span class="tstate" id="v-login">读取中…</span>
+          <label class="switch" for="c-login">
+            <input type="checkbox" id="c-login">
+            <span class="track"><span class="dot"></span></span>
+          </label>
+        </div>
+        <div class="trow" title="换自己的底图（这一版只记开关）">
+          <span class="rname">自定义背景</span>
+          <span class="tstate" id="v-custombg">已关闭</span>
+          <label class="switch" for="c-custombg">
+            <input type="checkbox" id="c-custombg">
+            <span class="track"><span class="dot"></span></span>
+          </label>
+        </div>
+
+        <div class="sep"></div>
+        <label class="row">
+          <span class="rname">模块放在哪</span>
+          <span class="rval">主槽位 / 扩展区</span>
         </label>
-        <label class="switch" for="c-login">
-          <input type="checkbox" id="c-login">
-          <span class="track"><span class="dot"></span></span>
-          <span class="txt" id="t-login">开机时自动运行控制台</span>
-        </label>
+        <div class="slots" id="slots"></div>
+      </div>
+
+      <!-- 扩展坞：一条手柄 + 往下抽出来的扩展区（宽度与主区完全一致） -->
+      <div class="dock" id="dock">
+        <button class="dock-bar" id="dock-bar" title="展开 / 收起扩展区">
+          <span class="dock-chev" id="dock-chev">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+              <path d="M6 9.5 12 15l6-5.5"></path>
+            </svg>
+          </span>
+        </button>
+        <div class="dock-area" id="dock-area">
+          <div class="dock-grid" id="dock-grid"></div>
+        </div>
       </div>
 
       <footer class="ftr">

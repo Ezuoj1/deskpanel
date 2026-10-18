@@ -51,6 +51,11 @@ contextBridge.exposeInMainWorld('panel', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.send('settings:set', patch || {}),
 
+  // 扩展坞：展开/收起（主进程负责窗口高度，页面负责内容过渡）
+  setDock: (open) => ipcRenderer.invoke('panel:set-dock', !!open),
+  // 槽位分配：{ main:[id|null×4], dock:[id…] }
+  slotsSet: (slots) => ipcRenderer.invoke('slots:set', slots),
+
   // 开机自启：读真实状态（含注册表）/ 开关
   loginGet: () => ipcRenderer.invoke('login:get'),
   loginSet: (enabled) => ipcRenderer.invoke('login:set', enabled),
