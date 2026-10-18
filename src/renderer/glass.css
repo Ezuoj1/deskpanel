@@ -198,6 +198,26 @@ body.is-strip { background: transparent; }
 }
 .l1-grid .cell { height: 91px; }
 
+/* 四个工作区卡片的“二次入场”：外框（.glass 的 Web Animations 展开）走完之后，
+   隔一点时间再让卡片自己从 0.8 弹到 1 并淡入。只动 transform/opacity。
+   注意：外框动画一个字都没改，这里只作用于卡片本身。 */
+.l1-grid .cell {
+  opacity: 0;
+  transform: scale(0.8);
+  will-change: transform, opacity;
+}
+body.cards-in .l1-grid .cell {
+  animation: cardIn 300ms cubic-bezier(0.2, 0.9, 0.3, 1.08) both;
+}
+body.cards-in .l1-grid > :nth-child(1) { animation-delay: var(--cards-delay, 480ms); }
+body.cards-in .l1-grid > :nth-child(2) { animation-delay: calc(var(--cards-delay, 480ms) + 45ms); }
+body.cards-in .l1-grid > :nth-child(3) { animation-delay: calc(var(--cards-delay, 480ms) + 90ms); }
+body.cards-in .l1-grid > :nth-child(4) { animation-delay: calc(var(--cards-delay, 480ms) + 135ms); }
+@keyframes cardIn {
+  from { opacity: 0; transform: scale(0.8); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
 .stage[data-level="2"] .l1 { opacity: 0; transform: scale(0.94); pointer-events: none; }
 .stage[data-level="2"] .l2 { opacity: 1; transform: scale(1); pointer-events: auto; }
 .l2 { opacity: 0; transform: scale(0.96); pointer-events: none; }

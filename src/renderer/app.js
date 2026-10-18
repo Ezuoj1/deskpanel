@@ -1206,6 +1206,16 @@ if (KIND === 'panel') {
       //     而玻璃又是半透明的 → 自己拍自己，会造成“一闪一闪”的反馈闪烁；
       //   · 静态底图是面板还没显示时拍的，没有自拍，动画期间也不会有任何逐帧变化。
       setLiveEnabled(state === 'collapsed');
+      // 四个工作区卡片的二次入场：外框展开（EXPAND_MS）结束后再等一会儿才开始
+      if (state === 'expanded') {
+        document.body.classList.remove('cards-in');
+        requestAnimationFrame(() => {
+          document.documentElement.style.setProperty('--cards-delay', (EXPAND_MS + 160) + 'ms');
+          document.body.classList.add('cards-in');
+        });
+      } else if (state === 'collapsing') {
+        document.body.classList.remove('cards-in');
+      }
       if (state === 'expanded') animateOpen();
       else if (state === 'collapsing') animateClose();
     });
