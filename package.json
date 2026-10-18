@@ -6,6 +6,14 @@
   "main": "src/main/main.js",
   "license": "MIT",
   "author": "DeskPanel contributors",
+  "homepage": "https://github.com/Ezuoj1/deskpanel#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ezuoj1/deskpanel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ezuoj1/deskpanel/issues"
+  },
   "keywords": [
     "electron",
     "windows",
