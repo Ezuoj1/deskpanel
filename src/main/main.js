@@ -275,7 +275,17 @@ let stripHideTimer = null;
 let dockOpen = false;
 
 function panelHeight() {
-  return PANEL_BASE_H + (dockOpen ? DOCK_AREA : 0);
+  // 窗口高度永远是“全展开”的高度（2026-10-18 定稿第 3 版）：
+  // 只要窗口尺寸不变，玻璃那层 blur(40px) 就不必重算，抽屉动画才不会卡。
+  // 收起时多出来的 132px 靠 setShape 裁掉——看不见，也不接收鼠标。
+  return PANEL_BASE_H + DOCK_AREA;
+}
+
+// 窗口形状：**不用 setShape**。实测它会让窗口在屏幕上彻底消失（属于 Electron 在
+// 透明窗口上的已知坑），风险太大。收起时多出来的 132px 仍然是窗口的一部分，
+// 点那里由页面判定为“点到外面”→ 直接收起面板（见 app.js 的 below-strip 处理）。
+function applyPanelShape() {
+  /* no-op：保留函数名，方便以后换方案 */
 }
 
 function computeBounds() {
@@ -450,6 +460,8 @@ function createWindows() {
     panelWin.setFocusable(false);
     // 收起状态下，面板窗口一律“不接收鼠标”，彻底杜绝点穿透
     panelWin.setIgnoreMouseEvents(true, { forward: true });
+    dockOpen = false;
+    applyPanelShape();                 // 只露出 302，下面 132 既看不见也不挡鼠标
     log('[panel] ready (hidden)', JSON.stringify(panelWin.getBounds()));
   });
 
@@ -465,7 +477,10 @@ function createWindows() {
     try {
       const b = panelWin.getBounds();
       const pt = screen.getCursorScreenPoint();
-      inside = pt.x >= b.x && pt.x < b.x + b.width && pt.y >= b.y && pt.y < b.y + b.height;
+      // 窗口永远 434 高，但收起时下面 132px 是被 setShape 裁掉的（点那里等于点桌面），
+      // 所以判“在不在面板里”只能用当前真正露出来的高度。
+      const visH = PANEL_BASE_H + (dockOpen ? DOCK_AREA : 0);
+      inside = pt.x >= b.x && pt.x < b.x + b.width && pt.y >= b.y && pt.y < b.y + visH;
     } catch (e) { inside = false; }
     if (inside) { log('[blur] 光标还在面板里，忽略这次失焦'); return; }
     log('[blur] 焦点离开控制台 → 收起');
@@ -496,31 +511,17 @@ function createWindows() {
 }
 
 // ---------------- 扩展坞 ----------------
-// 页面点手柄 → 这里改窗口高度 → 页面自己同步播 CSS 过渡。
-// 顺序很重要：先算好目标高度再交给动画函数，避免中途被 computeBounds 反复重算。
-function setDock(open, { animate = true } = {}) {
+// 页面点手柄 → 这里只记状态 + 通知页面；窗口尺寸自始至终不动（永远是 434）。
+// 真正的“展开”是页面把 .glass 的高度从 302 过渡到 434，再配合 setShape 开关可点击区域。
+function setDock(open) {
   const want = !!open;
   if (want === dockOpen) return { ok: true, open: dockOpen, changed: false };
   dockOpen = want;
   settings.dockOpen = want;
   saveSettings();
-  const b = computeBounds().panel;
-  log('[dock]', want ? '展开扩展区' : '收起扩展区', '→ 目标高度', b.height);
+  log('[dock]', want ? '展开扩展区' : '收起扩展区');
   if (!panelWin || panelWin.isDestroyed()) return { ok: true, open: dockOpen, changed: true };
   if (panelWin.webContents) panelWin.webContents.send('view:dock', { open: dockOpen });
-  // 高度由页面按 rAF 逐帧推过来（见 IPC panel:height）：
-  // setInterval 在 Windows 上会被计时器合并，帧间隔忽长忽短，看起来就是“机械抖动”；
-  // rAF 跟着 vsync 走，配合 CSS 的同一条缓动曲线，两边严格同步。
-  if (!animate) panelWin.setBounds(b);
-  // 高度一变，旧底图就裁短了；动画结束后重抓一张推给页面，玻璃才不会有拉伸感
-  setTimeout(() => {
-    if (!panelWin || panelWin.isDestroyed()) return;
-    grabBackdrop().then((shot) => {
-      if (shot && panelWin && !panelWin.isDestroyed()) {
-        panelWin.webContents.send('view:backdrop', { data: shot });
-      }
-    });
-  }, animate ? DOCK_MS + 60 : 40);
   return { ok: true, open: dockOpen, changed: true };
 }
 
@@ -555,6 +556,7 @@ async function expand({ focus = true, reason = 'click' } = {}) {
   // 现在只有“点击打开”，所以一律抢焦点：Esc、点外部都能正常工作。
   panelWin.setFocusable(true);
   panelWin.show();
+  applyPanelShape();                   // 每次打开都从“只露出四宫格”的形状开始
   panelWin.webContents.send('view:set-state', { state: 'expanded', reason, phase: 'animating' });
 
   // 窄条晚一点再藏：让它看起来是“边框长成了面板”，而不是边框先消失、面板再冒出来
@@ -566,7 +568,9 @@ async function expand({ focus = true, reason = 'click' } = {}) {
   }
   log('[timing] 窗口出现耗时', (Date.now() - t0) + 'ms');
 
-  if (!backdropCache || Date.now() - backdropAt > 4000) {
+  // 只有完全没有底图时才当场抓一张（抓的时候面板还没盖上去，不会有自拍）。
+  // 平时都在“收起之后”偷偷刷新，这样面板显示期间底图不会中途换图 —— 不会闪。
+  if (!backdropCache) {
     grabBackdrop().then((shot) => {
       if (shot && panelWin && !panelWin.isDestroyed() && state !== 'collapsed') {
         panelWin.webContents.send('view:backdrop', { data: shot });
@@ -596,6 +600,12 @@ function collapse(reason = 'manual') {
     // 窗口藏起来后再补一刀：彻底不接收鼠标，避免任何“点到看不见的东西”
     panelWin.setIgnoreMouseEvents(true, { forward: true });
     panelWin.webContents.send('view:set-state', { state: 'collapsed', reason });
+    // 趁面板看不见，偷偷把下一张静态底图抓好：这样下次打开时底图是新的，
+    // 而且显示期间永远不会中途换图（换图会闪一下）。
+    setTimeout(() => {
+      if (state !== 'collapsed') return;
+      grabBackdrop().catch(() => {});
+    }, 260);
   }, COLLAPSE_MS + 10);
 }
 
@@ -1150,17 +1160,11 @@ ipcMain.handle('env:info', () => {
 
 ipcMain.handle('settings:get', () => settings);
 
-// 扩展坞：展开 / 收起（高度动画在 setDock 里做，页面负责内容过渡）
-// 页面逐帧推高度（rAF），主进程只负责把窗口改到那一帧该有的高度。
-// 夹在 [PANEL_BASE_H, PANEL_BASE_H + DOCK_AREA] 之间，页面算错也不会把窗口搞坏。
-ipcMain.on('panel:height', (_e, value) => {
-  if (!panelWin || panelWin.isDestroyed()) return;
-  const n = Math.round(Number(value));
-  if (!Number.isFinite(n)) return;
-  const h = Math.max(PANEL_BASE_H, Math.min(PANEL_BASE_H + DOCK_AREA, n));
-  const b = panelWin.getBounds();
-  if (b.height === h) return;
-  panelWin.setBounds({ x: b.x, y: b.y, width: b.width, height: h });
+// 扩展坞：页面在动画开始/结束时告诉主进程“现在该露出多高”，主进程只改窗口形状。
+// 窗口本身的尺寸从不改变（永远 434），这样玻璃的 blur 不会被反复重算。
+ipcMain.on('panel:shape', (_e, open) => {
+  dockOpen = !!open;
+  applyPanelShape();
 });
 ipcMain.handle('panel:set-dock', (_e, open) => setDock(!!open));
 

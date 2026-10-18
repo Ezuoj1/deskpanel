@@ -153,17 +153,23 @@ if (KIND === 'panel') {
   // “面板在屏幕上的位置”精确摆到玻璃下面，再用 CSS filter: blur() 实时模糊。
   // 所以背后开着抖音/换壁纸，玻璃里是跟着动的。
   let liveInfo = null;
+  // 模糊层“降分辨率渲染”：元素按 1/K 的尺寸布局，再用 transform 放大 K 倍，
+  // 模糊半径同样除以 K —— 观感一样，但 GPU 要糊的像素少了 K² 倍（40px 全屏模糊太重，
+  // 玻璃一改尺寸就要重算一遍，这就是抽屉动画卡顿的来源）。
+  const LIVE_DOWN = 3;
 
   function placeLive() {
     if (!liveInfo) return;
     const [wStr, hStr] = String(liveInfo.size).split('×');
     const cssW = Number(wStr) / liveInfo.scale;
     const cssH = Number(hStr) / liveInfo.scale;
-    live.style.width = cssW + 'px';
-    live.style.height = cssH + 'px';
-    live.style.left = (-liveInfo.contentPos.x) + 'px';
-    live.style.top = (-liveInfo.contentPos.y) + 'px';
-    log('live 摆位', cssW, cssH, -liveInfo.contentPos.x, -liveInfo.contentPos.y);
+    const k = LIVE_DOWN;
+    live.style.width = (cssW / k) + 'px';
+    live.style.height = (cssH / k) + 'px';
+    live.style.left = (-liveInfo.contentPos.x / k) + 'px';
+    live.style.top = (-liveInfo.contentPos.y / k) + 'px';
+    live.style.transformOrigin = '0 0';
+    live.style.transform = `scale(${k})`;
   }
 
   async function startLive() {
@@ -189,20 +195,34 @@ if (KIND === 'panel') {
     }
   }
 
-  // 从实时画面里取一小块算平均亮度，决定用深色字还是白色字
+  // 实时桌面视频开关：面板显示期间关掉（见 onState 里的注释：避免自己拍自己造成闪烁）
+  function setLiveEnabled(on) {
+    if (!glass) return;
+    if (on) {
+      if (live.srcObject) glass.classList.add('is-live');
+    } else {
+      glass.classList.remove('is-live');
+    }
+  }
+
+  // 从背景画面里取一小块算平均亮度，决定用深色字还是白色字。
+  // 优先用实时视频；实时关掉时用主进程拍的静态底图（两者都代表“面板背后是什么”）。
   function sampleInk() {
-    if (!glass.classList.contains('is-live') || !live.videoWidth) return;
+    const useLive = glass.classList.contains('is-live') && live.videoWidth;
+    const bd = document.querySelector('.backdrop');
+    const useBd = !useLive && bd && bd.src && bd.complete && bd.naturalWidth;
+    if (!useLive && !useBd) return;
     try {
       const c = document.createElement('canvas');
       c.width = 32; c.height = 24;
       const ctx = c.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(live, 0, 0, 32, 24);
+      ctx.drawImage(useLive ? live : bd, 0, 0, 32, 24);
       const px = ctx.getImageData(0, 0, 32, 24).data;
       let sum = 0;
       for (let i = 0; i < px.length; i += 4) sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
       const luma = sum / (px.length / 4) / 255;
       glass.classList.toggle('ink-dark', luma > 0.62);
-      log('live 平均亮度', luma.toFixed(2));
+      log('背景平均亮度', luma.toFixed(2), useLive ? '(live)' : '(backdrop)');
     } catch (e) { log('取样失败', e.message); }
   }
 
@@ -313,6 +333,15 @@ if (KIND === 'panel') {
     if (e.target.closest('.settings')) return;
     goLevel(1);
   });
+
+  // 面板窗口永远是 434 高（这样抽屉动画才不用改窗口尺寸）。
+  // 扩展坞收起时，下面那 132px 是透明的、但窗口还在——点那里必须当“点到了控制台外面”，
+  // 直接把整个面板收起来（否则会像点了块死玻璃）。
+  document.addEventListener('pointerdown', (e) => {
+    if (!document.body.classList.contains('dock-clip')) return;   // 扩展区展开着就别管
+    if (e.clientY <= 302) return;
+    if (API && API.collapse) API.collapse('below-strip');
+  }, true);
 
   // ---------- 音乐：显示与操作 ----------
   // 状态由主进程推来（主进程读小助手写的 JSON），这里只管画和发命令。
@@ -952,43 +981,25 @@ if (KIND === 'panel') {
     persistSlots();
   }
 
-  // 抽屉动画（2026-10-18 定稿）：不逐帧改窗口高度，改成
-  //   展开：窗口一次性长到 434 →（玻璃还被 clip 剪着，画面不变）→ 去掉 clip，纯合成层滑出来；
-  //   收起：先 clip 剪回去 → 300ms 后把窗口缩回 302。
-  // 这样每一帧都不触发重排/重算 40px 模糊，实测帧间隔稳定。
+  // 抽屉动画（2026-10-18 定稿第 5 版）：
+  //   · 窗口永远 434、玻璃也永远 434 → 一次 layout / blur 重算都不会发生；
+  //   · 动画只碰 clip-path（合成层，实测帧间隔 5~6ms，全程无空档）；
+  //   · 收起状态靠 setShape(302) 把下面 132px 从窗口上裁掉，那里点下去等于点桌面。
   const DOCK_MS = 300;
   let dockTimer = 0;
-  const dockDebug = /(^|[?&])debug(=|&|$)/.test(location.search);
 
-  function dockSetHeight(h) {
-    if (API && API.setHeight) API.setHeight(h);
+  function dockShape(open) {
+    if (API && API.setShape) API.setShape(!!open);
   }
 
   function dockLayout(open) {
-    const glass = document.querySelector('.glass');
     if (open) {
-      // ① 先无过渡地把玻璃剪成 302（此时窗口还是 302，画面完全不变）
-      document.body.classList.add('no-clip-trans', 'dock-clipped');
-      void glass.offsetHeight;
-      document.body.classList.remove('no-clip-trans');
-      // ② 窗口一次性长到 434：多出来的 132px 还被剪着，屏幕上毫无变化
-      dockSetHeight(434);
-      // ③ 两帧之后去掉 clip → 纯粹的合成层动画，把扩展区“露”出来
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        document.body.classList.remove('dock-clipped');
-      }));
+      dockShape(true);                              // 先把 132px 纳入窗口（还夹着，看不见）
+      document.body.classList.remove('dock-clip');  // 松开夹子 → clip 动画 300ms
     } else {
-      // ① 先剪回去（300ms 合成层动画）
-      document.body.classList.add('dock-clipped');
+      document.body.classList.add('dock-clip');     // 夹上 → 动画收起
       clearTimeout(dockTimer);
-      // ② 剪完再把窗口缩回 302，并立刻解除 clip（此刻窗口只有 302 高，clip 已无意义）
-      dockTimer = setTimeout(() => {
-        dockSetHeight(302);
-        document.body.classList.add('no-clip-trans');
-        document.body.classList.remove('dock-clipped');
-        void glass.offsetHeight;
-        document.body.classList.remove('no-clip-trans');
-      }, DOCK_MS + 10);
+      dockTimer = setTimeout(() => dockShape(false), DOCK_MS + 30);   // 收完再从窗口上裁掉
     }
   }
 
@@ -999,13 +1010,13 @@ if (KIND === 'panel') {
     if (!dockEl) return;
     if (instant) {
       clearTimeout(dockTimer);
-      document.body.classList.add('dock-instant', 'no-clip-trans');
+      document.body.classList.add('dock-instant');
       dockEl.classList.toggle('open', dockOpen);
-      document.body.classList.remove('dock-clipped');
+      document.body.classList.toggle('dock-clip', !dockOpen);
       requestAnimationFrame(() => requestAnimationFrame(() => {
         document.body.classList.remove('dock-instant');
-        document.body.classList.remove('no-clip-trans');
       }));
+      dockShape(dockOpen);
     } else {
       dockEl.classList.toggle('open', dockOpen);
       if (wasOpen !== dockOpen) dockLayout(dockOpen);
@@ -1190,6 +1201,11 @@ if (KIND === 'panel') {
 
     API.onState(({ state }) => {
       log('state', state);
+      // 面板一出现就把“实时桌面视频”关掉，改用主进程提前拍好的静态底图：
+      //   · 实时那路是整屏捕获，会把面板自己也拍进去（画面里套一层虚影），
+      //     而玻璃又是半透明的 → 自己拍自己，会造成“一闪一闪”的反馈闪烁；
+      //   · 静态底图是面板还没显示时拍的，没有自拍，动画期间也不会有任何逐帧变化。
+      setLiveEnabled(state === 'collapsed');
       if (state === 'expanded') animateOpen();
       else if (state === 'collapsing') animateClose();
     });
@@ -1222,8 +1238,6 @@ if (KIND === 'panel') {
       applyLook(s.opacity, s.blur);
       // 扩展坞永远从收起开始（用户 2026-10-18 定死）：只在用户点箭头后才展开
       paintDock(false, true);
-      // 页面被手动刷新（Ctrl+R / devtools reload）时窗口可能还停在 434，这里拨回 302
-      if (window.innerHeight > 302) dockSetHeight(302);
       paintCustomBg(!!s.customBackground);
       if (s.slots) applySlots(s.slots);
       if (s.features && s.features.dock === false && dockEl) dockEl.hidden = true;
