@@ -838,6 +838,18 @@ if (KIND === 'panel') {
   btnGear.addEventListener('click', (e) => { e.stopPropagation(); toggleSettings(); });
   settings.addEventListener('click', (e) => e.stopPropagation());
 
+  // 点设置面板**外面**的任何地方 → 立刻关掉设置（层级不动，四宫格还是四宫格）。
+  // 用捕获阶段：卡片、按钮这些自己会 stopPropagation 的元素也拦不住它，
+  // 所以“点另一个工作区”既能关设置、又能正常进入那个工作区。
+  // 点齿轮本身要排除，否则它先关再开、等于点不动。
+  document.addEventListener('click', (e) => {
+    if (!settingsOpen) return;
+    const t = e.target;
+    if (t && t.closest && (t.closest('#settings') || t.closest('#btn-gear') || t.closest('.settings'))) return;
+    log('settings close -> 点了面板外面');
+    toggleSettings(false);
+  }, true);
+
   // ---------- 开机自启 ----------
   // 显示的是“注册表里到底有没有”，不是我们自己的字段——以系统事实为准。
   function paintLogin(st) {
