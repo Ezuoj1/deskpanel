@@ -13,12 +13,18 @@
 //       这样模糊半径、透明度都归我们控制，而且这张图跟玻璃是同一个元素，
 //       缩放时一起动 —— 内外绝对同步。
 // =====================================================================
-const { app, BrowserWindow, screen, ipcMain, nativeTheme, Tray, Menu, nativeImage, desktopCapturer, globalShortcut, session, shell, dialog } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, nativeTheme, Tray, Menu, nativeImage, desktopCapturer, globalShortcut, session, shell, dialog, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 const DEBUG = process.argv.includes('--panel-debug') || process.argv.includes('--automation');
 const AUTOMATION = process.argv.includes('--automation');
+
+// 透明窗口 + 置顶玻璃上，Windows 默认给文字开 ClearType 次像素抗锯齿：
+// 红/蓝子像素落在透明背景上就是肉眼可见的彩色毛边（放大看尤其明显）。
+// 关掉 LCD 文本渲染，强制灰度抗锯齿，字缘才是干净的。
+// 注意：CSS 的 -webkit-font-smoothing 在 Windows 上不生效，必须走这个 Chromium 开关。
+app.commandLine.appendSwitch('disable-lcd-text');
 
 const PANEL = { w: 380, h: 268 };
 // 扩展坞：四宫格下方那条带箭头的手柄（DOCK_BAR）+ 展开后露出的扩展区（DOCK_AREA）。
@@ -39,34 +45,50 @@ const COLLAPSE_MS = 260;
 // ---------------- 设置 ----------------
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 // openAtLogin 默认 true：这是“常驻桌面右上角”的工具，开机就该在。
-// slots：主区 4 个槽位 + 扩展区若干；null 表示“还没排过”，由页面按默认四宫格填。
+// order：5 个功能的显示顺序（一维数组），前 4 个进主区、其余进扩展区；没有空槽。
 // features.dock 是逃生开关：万一扩展坞出问题，改成 false 就退回纯四宫格。
 let settings = {
   opacity: 0.32,
   blur: 26,
   openAtLogin: true,
   customBackground: false,
+  // 自定义背景的颜色：customBackground 打开后，玻璃用这个色相染色
+  tint: '#6f8cff',
+  // 待办提前提醒：0=不提前，5/10=提前 5/10 分钟
+  remindLead: 0,
+  // 到点提醒怎么弹：
+  //   native = 系统通知（会进通知中心，点一下能跳回待办；被系统静音时可能看不到）
+  //   bubble = 应用内自绘气泡（一定看得见，但不进通知中心）
+  notifyStyle: 'native',
   dockOpen: false,
-  slots: null,
+  order: ['launch', 'music', 'wallpaper', 'notify', 'efficiency'],
   features: { dock: true },
 };
 
-function normalizeSlots(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const valid = ['launch', 'music', 'wallpaper', 'notify'];
-  const pick = (v) => (valid.includes(v) ? v : null);
-  const main = Array.isArray(raw.main) ? raw.main.slice(0, 4).map(pick) : [];
-  while (main.length < 4) main.push(null);
-  // 同一个模块不能同时出现在两个槽位里：以先出现的位置为准
+const MODULE_IDS = ['launch', 'music', 'wallpaper', 'notify', 'efficiency'];
+
+// order 是“功能卡片的一维顺序”，不是一个萝卜一个坑的槽位：
+//   前 4 个 → 主区四宫格；第 5 个起 → 底部扩展区。
+// 把“便签”拖到第 1 位，后面的卡片整体后移，不存在空位。
+// 老版本存过 slots（6 格、含 null）也在这里兼容：压平、去掉 null/重复、补齐新模块。
+function normalizeOrder(raw) {
+  let flat = [];
+  if (Array.isArray(raw)) {
+    flat = raw.slice();
+  } else if (raw && typeof raw === 'object') {
+    // 兼容老配置 { main:[…×4], dock:[…×2] }
+    flat = (Array.isArray(raw.main) ? raw.main : []).concat(Array.isArray(raw.dock) ? raw.dock : []);
+  }
   const seen = new Set();
-  const dedupe = (id) => {
-    if (!id || seen.has(id)) return null;
-    seen.add(id);
-    return id;
-  };
-  const mainOut = main.map(dedupe);
-  const dock = Array.isArray(raw.dock) ? raw.dock.map(pick).map(dedupe) : [];
-  return { main: mainOut, dock };
+  const out = [];
+  for (const v of flat) {
+    if (typeof v !== 'string' || !MODULE_IDS.includes(v) || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  // 没出现过的模块补到末尾，保证 5 个功能永远都在
+  for (const id of MODULE_IDS) if (!seen.has(id)) out.push(id);
+  return out;
 }
 
 function loadSettings() {
@@ -79,8 +101,14 @@ function loadSettings() {
   if (typeof settings.openAtLogin !== 'boolean') settings.openAtLogin = true;
   if (typeof settings.customBackground !== 'boolean') settings.customBackground = false;
   if (typeof settings.dockOpen !== 'boolean') settings.dockOpen = false;
+  if (!/^#[0-9a-f]{6}$/i.test(String(settings.tint || ''))) settings.tint = '#6f8cff';
+  if (![0, 5, 10].includes(Number(settings.remindLead))) settings.remindLead = 0;
+  settings.remindLead = Number(settings.remindLead);
+  if (!['native', 'bubble'].includes(settings.notifyStyle)) settings.notifyStyle = 'native';
   settings.features = { dock: true, ...(settings.features && typeof settings.features === 'object' ? settings.features : {}) };
-  settings.slots = normalizeSlots(settings.slots);
+  if (settings.order === undefined) settings.order = settings.slots;
+  delete settings.slots;
+  settings.order = normalizeOrder(settings.order);
   // 第一次跑（老版本 settings.json 里没有这个字段）：默认帮他打开开机自启；
   // 之后一律以 settings 为准，不再每次启动都去改注册表（否则用户从任务管理器关掉也会被我们改回来）。
   settingsNeedsLoginSync = !hasLoginFlag;
@@ -428,6 +456,18 @@ function makeWindow(kind, bounds) {
     win.webContents.send('view:request-close', { reason: 'esc' });
   });
   win.webContents.on('render-process-gone', (_e, d) => console.log(`[${kind}-gone]`, JSON.stringify(d)));
+  // 页面重载（改代码热重载、或渲染进程崩了重来）时，主进程手里可能已经有底图了：
+  // 直接补发一次，否则页面会以为“桌面是中性灰”，染色后的字色就会判错。
+  win.webContents.on('did-finish-load', () => {
+    if (kind !== 'panel') return;
+    const send = (d) => {
+      if (d && win && !win.isDestroyed() && state !== 'collapsed') {
+        win.webContents.send('view:backdrop', { data: d });
+      }
+    };
+    if (backdropCache) send(backdropCache);
+    else grabBackdrop().then(send).catch(() => {});
+  });
   win.webContents.on('did-finish-load', () => {
     win.webContents.executeJavaScript(
       `JSON.stringify({kind: (window.panel && window.panel.kind) || 'NO-PRELOAD',
@@ -471,6 +511,9 @@ function createWindows() {
   // 光标还在面板里面，就当没这回事；只有光标确实跑到外面了才收。
   panelWin.on('blur', () => {
     if (state !== 'expanded' && state !== 'animating') return;
+    // 自动化验收专用：CDP 驱动时窗口拿不到真实焦点，失焦会自动收起、没法连续操作。
+    // 只有显式带 --no-auto-collapse 才跳过，正常启动行为完全不变。
+    if (process.argv.includes('--no-auto-collapse')) { log('[blur] 验收模式，忽略失焦'); return; }
     // 正在弹“选软件”的系统对话框：那个框一弹出我们必然失焦，这时收起来会显得像闪退
     if (pickingApps) { log('[blur] 正在选文件，忽略这次失焦'); return; }
     let inside = false;
@@ -1155,6 +1198,376 @@ function createTray() {
 }
 
 // ---------------- IPC ----------------
+// ---------------- 效率工具（便签 + 待办） ----------------
+// 用户数据和设置分开存：eff.json 只放便签/待办，settings.json 放外观/自启。
+// 两边互不牵连，谁写坏了都只是自己丢。
+const EFF_PATH = path.join(app.getPath('userData'), 'eff.json');
+const EFF_LIMIT = { notes: 200, todos: 300 };
+let effData = { v: 1, notes: [], todos: [] };
+
+function normalizeEff(raw) {
+  const out = { v: 1, notes: [], todos: [] };
+  const str = (s, n) => (typeof s === 'string' ? s.slice(0, n) : '');
+  const num = (n) => (Number.isFinite(Number(n)) ? Number(n) : 0);
+  if (raw && Array.isArray(raw.notes)) {
+    out.notes = raw.notes
+      .filter((n) => n && n.id)
+      .slice(0, EFF_LIMIT.notes)
+      .map((n) => ({
+        id: String(n.id),
+        text: str(n.text, 4000),
+        // 置顶的便签永远排在最前面（页面按 pinned 先排、再按更新时间排）
+        pinned: !!n.pinned,
+        createdAt: num(n.createdAt) || Date.now(),
+        updatedAt: num(n.updatedAt) || num(n.createdAt) || Date.now(),
+      }));
+  }
+  if (raw && Array.isArray(raw.todos)) {
+    out.todos = raw.todos
+      .filter((t) => t && t.id)
+      .slice(0, EFF_LIMIT.todos)
+      .map((t) => ({
+        id: String(t.id),
+        text: str(t.text, 300),
+        dueAt: num(t.dueAt),
+        // 0 普通 / 1 重要 / 2 次要；坏值一律当普通
+        prio: (Number(t.prio) === 1 || Number(t.prio) === 2) ? Number(t.prio) : 0,
+        done: !!t.done,
+        doneAt: t.done ? (num(t.doneAt) || Date.now()) : null,
+        notifiedAt: num(t.notifiedAt) || null,
+        leadNotifiedAt: num(t.leadNotifiedAt) || null,
+        createdAt: num(t.createdAt) || Date.now(),
+      }));
+  }
+  return out;
+}
+
+function readEffFile(p) {
+  return normalizeEff(JSON.parse(fs.readFileSync(p, 'utf8')));
+}
+
+// 读档顺序：正式文件 → 上次写盘残留的 .tmp → 空。
+// 正式文件坏了不直接覆盖：改名留一份，用户至少还能手工捞回内容。
+function loadEff() {
+  const tmp = EFF_PATH + '.tmp';
+  if (fs.existsSync(EFF_PATH)) {
+    try {
+      effData = readEffFile(EFF_PATH);
+      return;
+    } catch (e) {
+      log('[eff] 存档解析失败', e.message);
+      const keep = EFF_PATH.replace(/\.json$/i, '') + '.broken-' + Date.now() + '.json';
+      try {
+        fs.renameSync(EFF_PATH, keep);
+        log('[eff] 已备份损坏存档', keep);
+      } catch (e2) { log('[eff] 备份损坏存档失败', e2.message); }
+    }
+  }
+  try {
+    if (fs.existsSync(tmp)) {
+      effData = readEffFile(tmp);
+      log('[eff] 已从 .tmp 恢复');
+      return;
+    }
+  } catch (e) { log('[eff] .tmp 也不可用', e.message); }
+  effData = { v: 1, notes: [], todos: [] };
+}
+
+// 写盘用 tmp + rename：写到一半断电也不会留下半截 JSON。
+// rename 偶尔会被杀软/索引占用顶掉，这时退一步直接覆盖写，别把这次改动丢了。
+function saveEff() {
+  const json = JSON.stringify(effData, null, 2);
+  try {
+    fs.mkdirSync(path.dirname(EFF_PATH), { recursive: true });
+    const tmp = EFF_PATH + '.tmp';
+    fs.writeFileSync(tmp, json, 'utf8');
+    try {
+      fs.renameSync(tmp, EFF_PATH);
+    } catch (e) {
+      fs.writeFileSync(EFF_PATH, json, 'utf8');
+      log('[eff] rename 失败，已直写', e.message);
+    }
+  } catch (e) { log('[eff] 存盘失败', e.message); }
+}
+
+function effNewId(prefix) {
+  return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// 到点未完成的数量：给模块格子上的红点用
+function effDueCount() {
+  const now = Date.now();
+  return effData.todos.filter((t) => !t.done && t.dueAt > 0 && t.dueAt <= now).length;
+}
+
+function effSnapshot() {
+  return {
+    notes: effData.notes,
+    todos: effData.todos,
+    remindLead: Number(settings.remindLead) || 0,
+    dueCount: effDueCount(),
+  };
+}
+
+function pushEff() {
+  if (panelWin && !panelWin.isDestroyed()) {
+    panelWin.webContents.send('eff:state', { dueCount: effDueCount() });
+  }
+}
+
+// ---------- 到点提醒 ----------
+// 定时器放主进程：控制台收在托盘、页面没打开，倒计时也照样在跑。
+// 20 秒一次（不是“算好毫秒 setTimeout 一次”）：休眠/改系统时间之后依然能补上。
+const REMIND_TICK_MS = 20000;
+let remindTimer = null;
+
+// 自绘提醒气泡：Windows 的原生 Toast 在“应用没有安装包身份 / 系统通知被关 / 勿扰”时会静默丢弃，
+// 这种情况下用户什么都看不到。所以原生 Toast 照发，另外再用一个无边框小窗兜底，保证提醒一定看得见。
+let toastWin = null;
+let toastTimer = null;
+let toastSeq = 0;
+
+function toastHtml(title, body) {
+  const esc = (s) => String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;height:100%;overflow:hidden;background:transparent;
+      font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;-webkit-user-select:none}
+    .card{box-sizing:border-box;height:100%;display:flex;gap:10px;align-items:center;
+      padding:12px 14px;border-radius:14px;color:#fff;
+      background:linear-gradient(160deg,rgba(24,30,48,.92),rgba(18,22,36,.86));
+      border:1px solid rgba(255,255,255,.18);
+      box-shadow:0 12px 30px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.22)}
+    .ico{flex:none;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+      background:rgba(111,140,255,.28);font-size:15px}
+    .txt{min-width:0;flex:1}
+    .t{font-size:12.5px;font-weight:700;margin-bottom:2px}
+    .b{font-size:11.5px;opacity:.8;line-height:1.35;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  </style></head><body><div class="card"><div class="ico">⏰</div>
+  <div class="txt"><div class="t">${esc(title)}</div><div class="b">${esc(body)}</div></div></div></body></html>`;
+}
+
+function hideToastWin() {
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+  if (toastWin && !toastWin.isDestroyed()) toastWin.hide();
+}
+
+function showToastBubble(title, body) {
+  try {
+    const wa = screen.getPrimaryDisplay().workArea;
+    const w = 316;
+    const h = 86;
+    const x = Math.round(wa.x + wa.width - w - 16);
+    const y = Math.round(wa.y + wa.height - h - 16);
+    if (!toastWin || toastWin.isDestroyed()) {
+      toastWin = new BrowserWindow({
+        width: w, height: h, x, y,
+        frame: false, transparent: true, resizable: false, movable: false,
+        skipTaskbar: true, alwaysOnTop: true, focusable: false, hasShadow: false,
+        show: false, backgroundColor: '#00000000',
+        webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+      });
+      toastWin.setAlwaysOnTop(true, 'screen-saver');
+      toastWin.on('closed', () => { toastWin = null; });
+    }
+    toastWin.setBounds({ x, y, width: w, height: h });
+    // 等页面真的画出来再显示：data URL 也要解码渲染，先 show 会闪一下空白窗。
+    // 用序号兜底：同一条提醒只 reveal 一次，后一条把前一条的回调作废。
+    const seq = ++toastSeq;
+    const reveal = () => {
+      if (seq !== toastSeq || !toastWin || toastWin.isDestroyed()) return;
+      try { toastWin.showInactive(); } catch (e) { log('[remind] 气泡显示失败', e.message); }
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => hideToastWin(), 9000);
+    };
+    toastWin.webContents.removeAllListeners('did-finish-load');
+    toastWin.webContents.once('did-finish-load', reveal);
+    setTimeout(reveal, 700);   // 极端情况下页面加载事件丢了，也要亮出来
+    toastWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(toastHtml(title, body)))
+      .catch((e) => log('[remind] 气泡加载失败', e.message));
+    log('[remind] 气泡已显示', title);
+  } catch (e) { log('[remind] 气泡显示失败', e.message); }
+}
+
+// 只出一条提醒：默认走系统原生 Toast（会进通知中心、点一下能跳回待办）；
+// 弹不出来时退回自绘气泡 —— 两个一起弹会叠在同一个角落，像重复提醒。
+// 设置里选了「应用内气泡」（settings.notifyStyle='bubble'）就完全不发系统通知：
+// 用户如果在“专注助手/关通知”的状态下，系统通知会被静默吞掉，气泡是唯一看得见的那条。
+// --toast-bubble 是调试开关：强制走气泡，用来单独验收气泡的样式。
+const FORCE_BUBBLE = process.argv.includes('--toast-bubble');
+
+function fireTodoToast(title, body) {
+  const wantBubble = FORCE_BUBBLE || settings.notifyStyle === 'bubble';
+  let shown = false;
+  try {
+    if (!wantBubble && Notification.isSupported()) {
+      const n = new Notification({ title, body, silent: false });
+      n.on('click', () => {
+        expand({ focus: true, reason: 'todo-notify' });
+        if (panelWin && !panelWin.isDestroyed()) {
+          panelWin.webContents.send('view:open-module', { module: 'efficiency', tab: 'todo' });
+        }
+      });
+      n.show();
+      shown = true;
+      log('[remind] 已弹系统通知', title, body);
+    } else {
+      log('[remind] 不发系统通知', wantBubble ? '(设置：应用内气泡)' : '(系统不支持)');
+    }
+  } catch (e) { log('[remind] 系统通知失败', e.message); }
+  if (!shown) {
+    showToastBubble(title, body);
+    log('[remind] 已改用自绘气泡', title);
+  }
+}
+
+function tickReminders() {
+  const now = Date.now();
+  const leadMs = (Number(settings.remindLead) || 0) * 60000;
+  const due = [];
+  const soon = [];
+  let dirty = false;
+  for (const t of effData.todos) {
+    if (t.done || !t.dueAt) continue;
+    const left = t.dueAt - now;
+    // 提前提醒（0/5/10 分钟）：提前量以内、还没到点，只弹一次
+    if (leadMs > 0 && !t.leadNotifiedAt && left > 0 && left <= leadMs) {
+      soon.push({ text: t.text, mins: Math.max(1, Math.round(left / 60000)) });
+      t.leadNotifiedAt = now;
+      dirty = true;
+    }
+    // 到点提醒：不管逾期多久都补一次；
+    // 但整轮只发一条（合并计数），所以关电脑两天再开机也不会弹一屏。
+    if (!t.notifiedAt && left <= 0) {
+      due.push(t.text);
+      t.notifiedAt = now;
+      dirty = true;
+    }
+  }
+  if (dirty) { saveEff(); pushEff(); }
+  if (!due.length && !soon.length) return;
+  const parts = [];
+  if (due.length === 1) parts.push(due[0]);
+  else if (due.length > 1) parts.push(due[0] + ' 等 ' + due.length + ' 项');
+  if (soon.length === 1) parts.push(soon[0].text + '（' + soon[0].mins + ' 分钟后）');
+  else if (soon.length > 1) parts.push(soon.length + ' 项即将到期');
+  const title = due.length
+    ? (due.length === 1 ? '时间到了' : due.length + ' 项待办到期')
+    : '还有 ' + soon[0].mins + ' 分钟';
+  fireTodoToast(title, parts.join('；'));
+}
+
+function startReminderTimer() {
+  if (remindTimer) return;
+  remindTimer = setInterval(tickReminders, REMIND_TICK_MS);
+  setTimeout(tickReminders, 1500);   // 启动后补跑一次
+  log('[remind] 定时器已启动', REMIND_TICK_MS + 'ms');
+}
+
+ipcMain.handle('eff:get', () => effSnapshot());
+
+ipcMain.handle('eff:note-add', (_e, text) => {
+  const t = String(text || '').trim();
+  if (!t) return effSnapshot();
+  effData.notes.unshift({ id: effNewId('n_'), text: t.slice(0, 4000), pinned: false, createdAt: Date.now(), updatedAt: Date.now() });
+  effData.notes = effData.notes.slice(0, EFF_LIMIT.notes);
+  saveEff();
+  return effSnapshot();
+});
+
+// 改便签内容：空内容视为无效，不覆盖原文（页面那边也会拦一道）
+ipcMain.handle('eff:note-update', (_e, payload) => {
+  const p = payload || {};
+  const t = String(p.text || '').trim();
+  const n = effData.notes.find((x) => x.id === p.id);
+  if (n && t) {
+    n.text = t.slice(0, 4000);
+    n.updatedAt = Date.now();
+    saveEff();
+  }
+  return effSnapshot();
+});
+
+// 置顶开关：只改排序权重，不动 updatedAt（否则一置顶就顶掉别的便签的顺序）
+ipcMain.handle('eff:note-pin', (_e, id) => {
+  const n = effData.notes.find((x) => x.id === id);
+  if (n) {
+    n.pinned = !n.pinned;
+    saveEff();
+  }
+  return effSnapshot();
+});
+
+ipcMain.handle('eff:note-remove', (_e, id) => {
+  effData.notes = effData.notes.filter((n) => n.id !== id);
+  saveEff();
+  return effSnapshot();
+});
+
+ipcMain.handle('eff:todo-add', (_e, payload) => {
+  const p = payload || {};
+  const t = String(p.text || '').trim();
+  if (!t) return effSnapshot();
+  // 页面可能传时间戳，也可能传 ISO 字符串（datetime-local 转出来的）
+  const dueAt = typeof p.dueAt === 'string' ? (Date.parse(p.dueAt) || 0) : (Number(p.dueAt) || 0);
+  const prio = (Number(p.prio) === 1 || Number(p.prio) === 2) ? Number(p.prio) : 0;
+  effData.todos.unshift({
+    id: effNewId('t_'),
+    text: t.slice(0, 300),
+    dueAt,
+    prio,
+    done: false,
+    doneAt: null,
+    notifiedAt: null,
+    leadNotifiedAt: null,
+    createdAt: Date.now(),
+  });
+  effData.todos = effData.todos.slice(0, EFF_LIMIT.todos);
+  saveEff();
+  tickReminders();          // 刚加的如果已经过了时间，立刻补一次
+  return effSnapshot();
+});
+
+// 改到期时间 / 优先级。改了时间就清掉已提醒标记，到点会按新时间重新提醒一次。
+ipcMain.handle('eff:todo-update', (_e, payload) => {
+  const p = payload || {};
+  const t = effData.todos.find((x) => x.id === p.id);
+  if (!t) return effSnapshot();
+  let dueChanged = false;
+  if (Object.prototype.hasOwnProperty.call(p, 'dueAt')) {
+    const raw = p.dueAt;
+    t.dueAt = typeof raw === 'string' ? (Date.parse(raw) || 0) : (Number(raw) || 0);
+    t.notifiedAt = null;
+    t.leadNotifiedAt = null;
+    dueChanged = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(p, 'prio')) {
+    const v = Number(p.prio);
+    t.prio = (v === 1 || v === 2) ? v : 0;
+  }
+  saveEff();
+  if (dueChanged) tickReminders();
+  return effSnapshot();
+});
+
+ipcMain.handle('eff:todo-toggle', (_e, id) => {
+  const t = effData.todos.find((x) => x.id === id);
+  if (t) {
+    t.done = !t.done;
+    t.doneAt = t.done ? Date.now() : null;
+    // 重新打开的任务要能再提醒一次
+    if (!t.done) { t.notifiedAt = null; t.leadNotifiedAt = null; }
+    saveEff();
+  }
+  return effSnapshot();
+});
+
+ipcMain.handle('eff:todo-remove', (_e, id) => {
+  effData.todos = effData.todos.filter((x) => x.id !== id);
+  saveEff();
+  return effSnapshot();
+});
+
 ipcMain.handle('env:info', () => {
   const d = screen.getPrimaryDisplay();
   const wa = d.workArea;
@@ -1182,12 +1595,12 @@ ipcMain.on('panel:shape', (_e, open) => {
 });
 ipcMain.handle('panel:set-dock', (_e, open) => setDock(!!open));
 
-// 槽位分配：页面传 { main:[id|null×4], dock:[id…] }，主进程校验后落盘
-ipcMain.handle('slots:set', (_e, slots) => {
-  settings.slots = normalizeSlots(slots);
+// 卡片顺序：页面传一维数组（前 4 个主区、其余扩展区），主进程校验后落盘
+ipcMain.handle('order:set', (_e, order) => {
+  settings.order = normalizeOrder(order);
   saveSettings();
-  log('[slots] 已保存', JSON.stringify(settings.slots));
-  return settings.slots;
+  log('[order] 已保存', JSON.stringify(settings.order));
+  return settings.order;
 });
 
 // 开机自启：给页面里的开关用
@@ -1217,12 +1630,34 @@ ipcMain.on('settings:set', (_e, patch) => {
   if (typeof next.blur === 'number') next.blur = Math.max(0, Math.min(40, next.blur));
   if (typeof next.customBackground === 'boolean') next.customBackground = next.customBackground;
   if (typeof next.openAtLogin === 'boolean') next.openAtLogin = next.openAtLogin;
-  // 槽位/扩展坞这类有结构的字段不允许从这条通道乱写，只走各自的 IPC
-  next.slots = settings.slots;
+  // 自定义背景的色相：只认 #rrggbb，别的一律忽略（防止页面传脏数据把样式写坏）
+  if (typeof patch.tint === 'string') {
+    const v = patch.tint.trim();
+    next.tint = /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : settings.tint;
+  } else {
+    next.tint = settings.tint;
+  }
+  // 待办提前提醒：只允许 0 / 5 / 10 分钟
+  if (patch.remindLead !== undefined) {
+    const n = Number(patch.remindLead);
+    next.remindLead = [0, 5, 10].includes(n) ? n : settings.remindLead;
+  } else {
+    next.remindLead = settings.remindLead;
+  }
+  // 提醒方式：只认 native / bubble 两种
+  if (patch.notifyStyle !== undefined) {
+    next.notifyStyle = ['native', 'bubble'].includes(patch.notifyStyle) ? patch.notifyStyle : settings.notifyStyle;
+  } else {
+    next.notifyStyle = settings.notifyStyle;
+  }
+  // 卡片顺序/扩展坞这类有结构的字段不允许从这条通道乱写，只走各自的 IPC
+  next.order = settings.order;
   next.dockOpen = settings.dockOpen;
   next.features = settings.features;
   settings = next;
   saveSettings();
+  // 提醒策略改了要马上生效（不用等下一个 tick 周期）
+  if (patch.remindLead !== undefined) tickReminders();
   log('[settings] 已保存', JSON.stringify(settings));
 });
 
@@ -1477,6 +1912,7 @@ app.whenReady().then(() => {
   // 扩展坞永远从“收起”开始：打开控制台只给主四宫格，展开要用户自己点箭头
   dockOpen = false;
   loadApps();
+  loadEff();
 
   // 开机自启：只有第一次运行（settings.json 里没这个字段）才自动写一次注册表，
   // 之后完全听用户的（页面开关 / 托盘勾选），我们不擅自改回来。
@@ -1504,6 +1940,8 @@ app.whenReady().then(() => {
   startFullscreenWatch();
   startMediaHelper();
   startNotifHelper();
+  // 待办提醒：主进程自己跑，不依赖面板是否打开
+  startReminderTimer();
 
   // 全局快捷键：Ctrl+Alt+空格 —— 显示 / 隐藏 来回切。
   // 全屏游戏里也允许按：此时给它一个“例外通行证”，不再被自动隐藏顶掉。
@@ -1554,6 +1992,7 @@ app.on('before-quit', () => {
   killMediaHelper();
   if (notifTimer) { clearInterval(notifTimer); notifTimer = null; }
   killNotifHelper();
+  if (remindTimer) { clearInterval(remindTimer); remindTimer = null; }
   // 退出即清：把通知的临时文件删干净（内存里的本来就跟进程一起没了）
   notifList = [];
   notifSeen.clear();

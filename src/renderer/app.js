@@ -75,6 +75,7 @@ if (KIND === 'panel') {
   const live = document.getElementById('live');
   const settings = document.getElementById('settings');
   const stage = document.querySelector('.stage');
+  const l2 = document.getElementById('view-l2');
   const t1 = document.getElementById('t1');
   const t2 = document.getElementById('t2');
   const modTitle = document.getElementById('mod-title');
@@ -89,6 +90,8 @@ if (KIND === 'panel') {
   const cLogin = document.getElementById('c-login');
   const vLogin = document.getElementById('v-login');
   const tLogin = document.getElementById('t-login');
+  // 设置里的「提醒方式」：系统通知 / 应用内气泡
+  const cNotify = document.getElementById('c-notify');
   const hintEsc = document.getElementById('hint-esc');
 
   // 音乐模块
@@ -130,6 +133,27 @@ if (KIND === 'panel') {
   const lBrowse = document.getElementById('l-browse');
   const lEmpty = document.getElementById('l-empty');
   const lHint = document.getElementById('l-hint');
+
+  // 效率工具（便签 / 待办）
+  const modEff = document.getElementById('mod-eff');
+  const eBadge = document.getElementById('e-badge');
+  const eTabNote = document.getElementById('e-tab-note');
+  const eTabTodo = document.getElementById('e-tab-todo');
+  const eLeadWrap = document.getElementById('e-lead-wrap');
+  const eLead = document.getElementById('e-lead');
+  const ePaneNote = document.getElementById('e-pane-note');
+  const ePaneTodo = document.getElementById('e-pane-todo');
+  const eNoteInput = document.getElementById('e-note-input');
+  const eNoteSave = document.getElementById('e-note-save');
+  const eNoteList = document.getElementById('e-note-list');
+  const eNoteEmpty = document.getElementById('e-note-empty');
+  const eNoteCount = document.getElementById('e-note-count');
+  const eTodoText = document.getElementById('e-todo-text');
+  const eTodoTime = document.getElementById('e-todo-time');
+  const eTodoPrio = document.getElementById('e-todo-prio');
+  const eTodoAdd = document.getElementById('e-todo-add');
+  const eTodoList = document.getElementById('e-todo-list');
+  const eTodoEmpty = document.getElementById('e-todo-empty');
 
   panelEl.hidden = false;
   // 面板窗口里也不需要窄条那套 DOM，一并删掉，避免任何遮挡/穿透
@@ -210,8 +234,19 @@ if (KIND === 'panel') {
   // 判定结果直接落到 body 的 .on-light 上——字、图标、卡片底、描边一起换，
   // 不会出现“字变黑了但图标还是白的”这种半截状态。
   const LUMA_LIGHT = 0.55;   // 取 65 分位的亮度，超过它就换深色字
+  let lastLuma = 0.5;        // 关掉自定义染色时要靠它恢复字色
   function applyTone(luma) {
+    // 开了自定义背景色时，玻璃的底色由用户选的颜色决定，
+    // 这时候不该再按“背后的桌面亮不亮”来换字色（否则深色主题配深色字）。
+    if (document.body.classList.contains('has-tint')) {
+      // 染色时字色由「桌面亮度 + 色相亮度」的混合结果决定，所以这里不能直接 return：
+      // 记下新亮度，再让 applyTint 重算一次（否则启动那一刻算出来的字色会一直用下去）。
+      lastLuma = luma;
+      applyTint(tint, true);
+      return;
+    }
     const light = luma > LUMA_LIGHT;
+    lastLuma = luma;
     if (document.body.classList.contains('on-light') === light) return;
     document.body.classList.toggle('on-light', light);
     log('[tone] 背景亮度', luma.toFixed(2), light ? '→ 深色字' : '→ 白色字');
@@ -308,38 +343,34 @@ if (KIND === 'panel') {
     });
   }
 
-  // ---------- 层 1 / 层 2 ----------
+  // ---------- 卡片 = 工作区（同一个实体放大 / 缩回） ----------
+  // 没有第二层 overlay：点开的卡片自己从格子位置长到舞台中央，关上时原路缩回。
+  // 卡片的 DOM 全程是同一个节点，里面的 .work 装着它自己的工作区。
+  let openState = null;      // { id, ghost, parent }
+  let openAnim = null;
+  let openSeq = 0;
+  let cardsTimer = 0;
+
   const MODULES = {
     launch: { title: '快捷启动', sub: '添加 / 排序 / 启动软件' },
     music: { title: '音乐', sub: '控制当前播放器' },
     wallpaper: { title: '壁纸', sub: 'Wallpaper Engine' },
     notify: { title: '通知', sub: '授权 / 脱敏列表' },
+    efficiency: { title: '效率工具', sub: '便签 / 待办' },
   };
 
   // 整个控制台一收起（Esc / 点外部 / 快捷键 / 点 ✕），内部状态必须强制回到“主四宫格”。
-  // 否则下次呼出会残留上次的设置面板、或者某个放大的工作区。
-  // 放在 collapsed（窗口已经 hide 之后）执行：这时看不见，切换不会有跳变。
   function resetView() {
     if (settingsOpen) toggleSettings(false);
-    if (level !== 1) goLevel(1);
+    exitEditing();
+    if (level === 2) closeCard(true);
     log('[reset] 收起后视图重置为四宫格');
   }
 
-  function goLevel(n, mod) {
-    level = n;
-    stage.dataset.level = String(n);
-    // 层 2 里可能装不同模块：快捷启动 / 音乐 / 壁纸 / 通知各有自己的面板
-    const isMusic = n === 2 && mod === 'music';
-    const isWall = n === 2 && mod === 'wallpaper';
-    const isNotif = n === 2 && mod === 'notify';
-    modBody.hidden = isMusic || isWall || isNotif;
-    modMusic.hidden = !isMusic;
-    modWall.hidden = !isWall;
-    if (modNotify) modNotify.hidden = !isNotif;
-    if (n === 2 && MODULES[mod]) {
-      if (modTitle) modTitle.textContent = MODULES[mod].title;
-      if (modSub) modSub.textContent = MODULES[mod].sub;
-      t1.textContent = MODULES[mod].title;
+  function setHeader(n, mod) {
+    const meta = n === 2 ? MODULES[mod] : null;
+    if (meta) {
+      t1.textContent = meta.title;
       t2.textContent = '点空白 / Esc 返回上一级';
       hintEsc.textContent = 'Esc 返回四宫格';
     } else {
@@ -348,20 +379,134 @@ if (KIND === 'panel') {
       hintEsc.textContent = 'Esc / 点外部 收起';
     }
     btnBack.hidden = n !== 2;
-    btnGear.style.display = n === 2 ? 'none' : '';   // 层 2 让位给返回键，避免两个按钮叠一起
-    log('level ->', n, mod || '');
+    btnGear.style.display = n === 2 ? 'none' : '';
   }
 
-  // 层 2 的“内部空白”= 控制台里面、但不在卡片（工作区）上的地方：标题栏、边距。
-  // 点这里等于按 ESC：退回四宫格。点卡片内部不算（那是工作区），
-  // 点控制台外面由主进程的 blur 直接收起整个面板。
+  function openCard(el) {
+    if (!el || level === 2 || editing || openState) return;
+    el.classList.remove('closing');
+    const rec = cards.get(el.dataset.module);
+    if (!rec) return;
+    const src = el.getBoundingClientRect();
+    const s = stage.getBoundingClientRect();
+    const parent = el.parentNode;
+    const ghost = document.createElement('div');
+    ghost.className = 'cell-ghost';
+    parent.insertBefore(ghost, el);
+    // 同一个节点搬到舞台上，从格子矩形长到铺满舞台
+    stage.appendChild(el);
+    el.classList.add('open');
+    el.style.position = 'absolute';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.width = '100%';
+    el.style.height = '100%';
+    const from = `translate(${src.left - s.left}px, ${src.top - s.top}px) scale(${src.width / s.width}, ${src.height / s.height})`;
+    el.style.transformOrigin = '0 0';
+    el.style.transform = from;
+    if (rec.mod) rec.mod.hidden = false;
+    document.body.classList.add('module-open');
+    level = 2;
+    stage.dataset.level = '2';
+    setHeader(2, el.dataset.module);
+    if (el.dataset.module === 'efficiency') loadEff();
+    if (openAnim) { try { openAnim.cancel(); } catch (e) {} }
+    setSortableEnabled(false);
+    const token = ++openSeq;
+    // CSS transition + transitionend，不用 setTimeout 死等
+    el.style.transition = 'none';
+    el.style.transform = from;
+    void el.offsetWidth;
+    el.style.transition = 'transform 340ms cubic-bezier(0.2, 0.9, 0.24, 1)';
+    el.style.transform = 'none';
+    el.addEventListener('transitionend', function onEnd(ev) {
+      if (ev.propertyName !== 'transform') return;
+      el.removeEventListener('transitionend', onEnd);
+      if (token !== openSeq) return;
+      el.style.transition = '';
+      el.style.transform = '';
+    });
+    openState = { id: el.dataset.module, ghost, parent };
+  }
+
+  function finishClose(el, rec, ghost, parent) {
+    document.body.classList.remove('module-open');
+    openState = null;
+    // 同一帧：藏掉动画层 + 立刻亮出四宫格（先禁掉 l1 的 opacity 过渡，避免淡入缓冲）
+    const l1 = document.getElementById('view-l1');
+    if (l1) l1.style.transition = 'none';
+    level = 1;
+    stage.dataset.level = '1';
+    if (el) {
+      el.classList.remove('open');
+      el.classList.remove('closing');
+      el.style.position = '';
+      el.style.left = '';
+      el.style.top = '';
+      el.style.width = '';
+      el.style.height = '';
+      el.style.transform = '';
+      el.style.transformOrigin = '';
+      el.style.transition = '';
+      el.style.pointerEvents = '';
+      if (rec && rec.mod) rec.mod.hidden = true;
+      if (parent && ghost && ghost.parentNode) parent.insertBefore(el, ghost);
+    }
+    if (ghost && ghost.parentNode) ghost.remove();
+    if (l1) { void l1.offsetWidth; l1.style.transition = ''; }
+    setHeader(1);
+    setSortableEnabled(true);
+  }
+
+  function closeCard(instant) {
+    if (level !== 2 || !openState) return;
+    const st = openState;
+    if (st.closing && !instant) return;
+    st.closing = true;
+    const rec = cards.get(st.id);
+    const el = rec && rec.el;
+    document.body.classList.remove('module-open');   // 扩展区在缩回过程中要露出来
+    if (openAnim) { try { openAnim.cancel(); } catch (e) {} openAnim = null; }
+    if (!el || !st.ghost || !st.ghost.isConnected) {
+      finishClose(el, rec, st.ghost, st.parent);
+      return;
+    }
+    const s = stage.getBoundingClientRect();
+    const g = st.ghost.getBoundingClientRect();
+    const to = `translate(${g.left - s.left}px, ${g.top - s.top}px) scale(${g.width / s.width}, ${g.height / s.height})`;
+    // 内容先淡出：到 80% 前必须全透明，绝不能缩到卡片大小还挤着大界面的字
+    el.classList.add('closing');
+    if (instant) {
+      ++openSeq;
+      el.style.transformOrigin = '0 0';
+      el.style.transform = to;
+      finishClose(el, rec, st.ghost, st.parent);
+      return;
+    }
+    const token = ++openSeq;
+    el.style.transition = 'transform 320ms cubic-bezier(0.45, 0.05, 0.2, 1)';
+    el.style.transform = to;
+    el.addEventListener('transitionend', function onEnd(ev) {
+      if (ev.target !== el || ev.propertyName !== 'transform') return;
+      el.removeEventListener('transitionend', onEnd);
+      if (token !== openSeq) return;
+      finishClose(el, rec, st.ghost, st.parent);
+    });
+  }
+
+  function enterModule(el, mod) {
+    const c = cards.get(mod);
+    if (c) openCard(c.el);
+  }
+  function exitModule() { closeCard(false); }
+
   document.addEventListener('click', (e) => {
     if (level !== 2) return;
     const inMod = !!(e.target.closest && e.target.closest('.mod'));
     if (inMod) return;
     if (e.target.closest('button')) return;
     if (e.target.closest('.settings')) return;
-    goLevel(1);
+    exitModule();
   });
 
   // 面板窗口永远是 434 高（这样抽屉动画才不用改窗口尺寸）。
@@ -863,154 +1008,351 @@ if (KIND === 'panel') {
     });
   }
 
-  document.querySelectorAll('.cell').forEach((el) => {
-    el.addEventListener('click', (e) => {
+  document.addEventListener('click', (e) => {
+    const cell = e.target.closest && e.target.closest('.cell[data-module]');
+    if (!cell) return;
+    if (level === 2) return;                 // 打开的工作区内部点击，交给各模块自己处理
+    if (editing || Date.now() < justSortedUntil) {
+      e.preventDefault();
       e.stopPropagation();
-      goLevel(2, el.dataset.module);
-      // 进音乐模块时先要一份最新状态，别等下一个推送周期
-      if (el.dataset.module === 'music' && API && API.mediaGet) {
-        API.mediaGet().then(renderMedia).catch(() => {});
-      }
-      if (el.dataset.module === 'wallpaper') loadWalls();
-      if (el.dataset.module === 'launch') loadApps();
-      if (el.dataset.module === 'notify') {
-        loadNotifs().then(() => {
-          // 点开列表就算“已读”：红点马上消失，但条目还留着给你看
-          if (API && API.notifRead) API.notifRead();
-          setBadge(0);
-        });
-      }
-    });
-  });
+      return;
+    }
+    e.stopPropagation();
+    const mod = cell.dataset.module;
+    openCard(cell);
+    // 进模块时先要一份最新状态，别等下一个推送周期
+    if (mod === 'music' && API && API.mediaGet) API.mediaGet().then(renderMedia).catch(() => {});
+    if (mod === 'wallpaper') loadWalls();
+    if (mod === 'launch') loadApps();
+    if (mod === 'notify') {
+      loadNotifs().then(() => {
+        if (API && API.notifRead) API.notifRead();
+        setBadge(0);
+      });
+    }
+  }, true);
 
-  btnBack.addEventListener('click', (e) => { e.stopPropagation(); goLevel(1); });
+  btnBack.addEventListener('click', (e) => { e.stopPropagation(); exitModule(); });
 
-  // ---------- 扩展坞 + 槽位（本次结构升级） ----------
-  // 设计要点：
-  //   · 四宫格仍然是“主槽位”，固定 4 个位置；模块被挪走后原地留虚线空卡，不许后面的格子顶上。
-  //   · 扩展区里的格子复用 .cell 本身（同一个 DOM 元素，只是 appendChild 换个爹），
-  //     所以点击、拖拽、红点这些监听一个都不会丢。
-  //   · 动画分两层：主进程改窗口高度（只有 Y 变），页面改 .dock-area 的高度（CSS 190ms）。
+  // ---------- 扩展坞 + 卡片顺序（一维数组） ----------
+  // 设计要点（2026-10-19 定稿）：
+  //   · 五个功能就是五张卡，只有“顺序”，没有槽位、没有空位；
+  //   · 一维数组的前 4 个渲染进四宫格，第 5 个起渲染进底部扩展区；
+  //   · 拖到别的位置 = 改数组顺序，后面的卡整体前移/后移；
+  //   · 卡片 DOM 全程复用（只 appendChild 换个爹），点击/红点/拖拽监听都不会丢。
   const dockEl = document.getElementById('dock');
   const dockBar = document.getElementById('dock-bar');
   const l1Grid = document.getElementById('l1-grid');
   const dockGrid = document.getElementById('dock-grid');
-  const slotsEl = document.getElementById('slots');
   const cCustomBg = document.getElementById('c-custombg');
   const vCustomBg = document.getElementById('v-custombg');
   const tCustomBg = document.getElementById('t-custombg');
+  const tintRow = document.getElementById('tint-row');
+  const tintCustom = document.getElementById('tint-custom');
 
-  // 模块登记表：id 与 data-module 对应，element 就是页面上原来那个 button
-  const REGISTRY = Array.from(document.querySelectorAll('.cell'))
-    .filter((el) => el.dataset && el.dataset.module)
-    .map((el) => {
-      const ct = el.querySelector('.ct');
-      return { id: el.dataset.module, title: ct ? ct.textContent : el.dataset.module, el };
-    });
-  const MODULE_IDS = REGISTRY.map((r) => r.id);
-
-  // 默认排法：四个都在主槽位，扩展区空着（跟升级前一模一样）
-  let slots = { main: MODULE_IDS.slice(0, 4), dock: [] };
+  // 一张卡 = 一个常驻 DOM：.tile 是图标面，.work 里装着原来的模块面板。
+  // 点开时就是这张卡自己长到舞台上（不再有 #view-l2 这一层），缩回时原路变回卡片。
+  const cards = new Map();
+  let order = [];
   let dockOpen = false;
+  const MAIN_COUNT = 4;
+  const MODULE_IDS = Object.keys(MODULES);
 
-  function makeEmptySlot() {
-    const d = document.createElement('div');
-    d.className = 'cell empty';
-    d.innerHTML = '<span class="cs">空槽位</span>';
-    return d;
+  function buildCards() {
+    const modMap = {
+      launch: 'mod-body',
+      music: 'mod-music',
+      wallpaper: 'mod-wall',
+      notify: 'mod-notify',
+      efficiency: 'mod-eff',
+    };
+    document.querySelectorAll('.cell[data-module]').forEach((old) => {
+      const id = old.dataset.module;
+      const article = document.createElement('article');
+      article.className = 'cell';
+      article.dataset.module = id;
+      article.tabIndex = 0;
+      const tile = document.createElement('div');
+      tile.className = 'tile';
+      while (old.firstChild) tile.appendChild(old.firstChild);
+      const work = document.createElement('div');
+      work.className = 'work';
+      const mod = document.getElementById(modMap[id]);
+      if (mod) { mod.hidden = true; work.appendChild(mod); }
+      article.appendChild(tile);
+      article.appendChild(work);
+      old.replaceWith(article);
+      cards.set(id, { el: article, tile, work, mod });
+    });
+    if (l2) l2.hidden = true;
   }
 
-  function paintSlots() {
-    const byId = new Map(REGISTRY.map((r) => [r.id, r]));
-    if (l1Grid) {
-      l1Grid.innerHTML = '';
-      for (let i = 0; i < 4; i += 1) {
-        const id = slots.main[i];
-        l1Grid.appendChild(id && byId.has(id) ? byId.get(id).el : makeEmptySlot());
-      }
+  // 主进程/老配置回来的数据统一压成一维顺序；非法 id、重复 id 丢掉，缺的补到末尾。
+  function normalizeLocalOrder(raw) {
+    let arr = [];
+    if (Array.isArray(raw)) {
+      arr = raw.slice();
+    } else if (raw && typeof raw === 'object') {
+      arr = (Array.isArray(raw.main) ? raw.main : []).concat(Array.isArray(raw.dock) ? raw.dock : []);
     }
-    if (dockGrid) {
-      dockGrid.innerHTML = '';
-      if (!slots.dock.length) {
-        const hint = document.createElement('div');
-        hint.className = 'dock-hint';
-        hint.textContent = '扩展区还空着 · 设置 → 模块放在哪';
-        dockGrid.appendChild(hint);
-      } else {
-        slots.dock.forEach((id) => { if (byId.has(id)) dockGrid.appendChild(byId.get(id).el); });
-      }
-    }
-  }
-
-  // 主进程回来的槽位数据一律过一遍：非法 id 丢掉、同一模块只留第一次出现
-  function applySlots(raw) {
-    if (!raw || typeof raw !== 'object') return;
     const seen = new Set();
-    const main = [];
-    for (let i = 0; i < 4; i += 1) {
-      const id = Array.isArray(raw.main) ? raw.main[i] : null;
-      if (id && MODULE_IDS.includes(id) && !seen.has(id)) { seen.add(id); main.push(id); }
-      else main.push(null);
+    const out = [];
+    for (const v of arr) {
+      if (typeof v !== 'string' || !MODULE_IDS.includes(v) || seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
     }
-    const dock = [];
-    (Array.isArray(raw.dock) ? raw.dock : []).forEach((id) => {
-      if (id && MODULE_IDS.includes(id) && !seen.has(id)) { seen.add(id); dock.push(id); }
-    });
-    slots = { main, dock };
-    paintSlots();
-    buildSlotSelects();
+    MODULE_IDS.forEach((id) => { if (!seen.has(id)) out.push(id); });
+    return out;
   }
 
-  function persistSlots() {
-    if (API && API.slotsSet) API.slotsSet(slots).catch(() => {});
-  }
-
-  function buildSlotSelects() {
-    if (!slotsEl) return;
-    slotsEl.innerHTML = '';
-    REGISTRY.forEach((r) => {
-      const row = document.createElement('div');
-      row.className = 'slot-row';
-      const name = document.createElement('span');
-      name.className = 'sname';
-      name.textContent = r.title;
-      const sel = document.createElement('select');
-      sel.className = 'slot-sel';
-      [['main:0', '主槽位 1'], ['main:1', '主槽位 2'], ['main:2', '主槽位 3'], ['main:3', '主槽位 4'], ['dock', '扩展区']]
-        .forEach(([v, t]) => {
-          const op = document.createElement('option');
-          op.value = v; op.textContent = t;
-          sel.appendChild(op);
-        });
-      const cur = slots.main.indexOf(r.id);
-      sel.value = cur >= 0 ? 'main:' + cur : 'dock';
-      sel.addEventListener('change', () => assign(r.id, sel.value));
-      row.appendChild(name);
-      row.appendChild(sel);
-      slotsEl.appendChild(row);
+  // 只按 order 渲染：0..3 主区，4.. 扩展区。没有模块的位置不存在（不画空卡）。
+  // 全程复用同一批 DOM 节点，只换父节点。
+  function paintOrder() {
+    if (!cards.size) return;
+    l1Grid.textContent = '';
+    dockGrid.textContent = '';
+    order.forEach((id, i) => {
+      const rec = cards.get(id);
+      if (!rec) return;
+      rec.el.dataset.index = String(i);
+      (i < MAIN_COUNT ? l1Grid : dockGrid).appendChild(rec.el);
     });
   }
 
-  // 把某个模块放到目标位置；目标位置上原本的人被挤到扩展区（不让他凭空消失）
-  function assign(id, target) {
-    const from = slots.main.indexOf(id);
-    if (from >= 0) slots.main[from] = null;
-    else slots.dock = slots.dock.filter((x) => x !== id);
-    if (target === 'dock') {
-      if (!slots.dock.includes(id)) slots.dock.push(id);
-    } else {
-      const idx = Number(String(target).split(':')[1]) || 0;
-      const occupant = slots.main[idx];
-      slots.main[idx] = id;
-      if (occupant && occupant !== id && !slots.main.includes(occupant) && !slots.dock.includes(occupant)) {
-        slots.dock.push(occupant);
+  function applyOrder(raw) {
+    order = normalizeLocalOrder(raw);
+    paintOrder();
+  }
+
+  function persistOrder() {
+    if (API && API.orderSet) API.orderSet(order).catch(() => {});
+  }
+
+  // ---------- iOS 风格：右键长按 → 全部抖动 → 拖拽互换（SortableJS） ----------
+  // 手写 Pointer 事件已删。这里直接用 SortableJS 1.15.7（vendor/sortable.min.js）：
+  //   button:2 右键；delay:300 长按；两个容器同组，可跨主区/扩展区拖。
+  let editing = false;
+  let dockWasClosed = false;
+  let justSortedUntil = 0;
+  const sortables = [];
+  let magnetCell = null;
+  let magnetRects = null;
+  let dragFollower = null;
+  let dragGrab = null;
+
+  function enterEditing() {
+    if (editing) return;
+    editing = true;
+    document.body.classList.add('editing');
+    document.body.classList.add('cards-done');
+    document.body.classList.remove('cards-in');
+    cards.forEach((rec, id) => rec.el.style.setProperty('--jd', `${(order.indexOf(id) % 5) * 37}ms`));
+    dockWasClosed = false;
+    if (order.length > MAIN_COUNT && !dockOpen) {
+      dockWasClosed = true;
+      paintDock(true, true);
+    }
+    log('[order] 进入编辑态');
+  }
+
+  function exitEditing() {
+    if (!editing) return;
+    editing = false;
+    stopFollower();
+    document.body.classList.remove('editing');
+    document.querySelectorAll('.cell.sortable-chosen').forEach((c) => c.classList.remove('sortable-chosen'));
+    if (dockWasClosed) {
+      dockWasClosed = false;
+      paintDock(false, true);
+    }
+    log('[order] 退出编辑态');
+  }
+
+  function collectOrder() {
+    const ids = [];
+    [l1Grid, dockGrid].forEach((grid) => {
+      if (!grid) return;
+      grid.querySelectorAll('.cell[data-module]').forEach((c) => ids.push(c.dataset.module));
+    });
+    return ids;
+  }
+
+  function flopCards(ids, rects) {
+    ids.forEach((id) => {
+      const rec = cards.get(id);
+      const or = rects[id];
+      if (!rec || !or) return;
+      const nr = rec.el.getBoundingClientRect();
+      const dx = or.left - nr.left;
+      const dy = or.top - nr.top;
+      if (!dx && !dy) return;
+      rec.el.animate(
+        [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
+        { duration: 180, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+      );
+    });
+  }
+
+  // 把目标卡“磁吸”到拖拽卡原来的坑位：只动目标卡，占位符永远留在 A
+  function clearMagnet(instant) {
+    if (!magnetCell) return;
+    const el = magnetCell;
+    magnetCell = null;
+    el.classList.remove('magnet-move');
+    if (instant) {
+      el.style.transition = 'none';
+      el.style.transform = '';
+      void el.offsetWidth;
+      el.style.transition = '';
+      return;
+    }
+    el.style.transition = 'transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1)';
+    el.style.transform = '';
+    const done = () => {
+      el.style.transition = '';
+      el.removeEventListener('transitionend', done);
+    };
+    el.addEventListener('transitionend', done);
+  }
+
+  function setMagnet(cell) {
+    if (cell === magnetCell) return;
+    clearMagnet(false);
+    if (!cell || !magnetRects || !magnetRects.draggedEl) return;
+    const a = magnetRects.get(magnetRects.draggedEl);
+    const b = magnetRects.get(cell);
+    if (!a || !b) return;
+    magnetCell = cell;
+    cell.classList.add('magnet-move');
+    cell.style.transition = 'none';
+    cell.style.transform = `translate(${Math.round(a.left - b.left)}px, ${Math.round(a.top - b.top)}px)`;
+    void cell.offsetWidth;
+    cell.style.transition = 'transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1)';
+  }
+
+  // 用拖拽开始时记下的原始格子坐标判定悬停，目标卡飞走后也不会丢命中
+  function onDragPointerMove(e) {
+    if (dragFollower && dragGrab) {
+      dragFollower.style.left = Math.round(dragGrab.left + e.clientX - dragGrab.x) + 'px';
+      dragFollower.style.top = Math.round(dragGrab.top + e.clientY - dragGrab.y) + 'px';
+    }
+    if (!magnetRects) return;
+    let hit = null;
+    for (const [el, r] of magnetRects) {
+      if (el === magnetRects.draggedEl) continue;
+      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+        hit = el;
+        break;
       }
     }
-    paintSlots();
-    buildSlotSelects();
-    persistSlots();
+    setMagnet(hit);
   }
 
+  // 跟手实体：就是被拎起那张卡的完整外观（白底、图标、文字），用 fixed 坐标咬住光标
+  function startFollower(item, evt) {
+    stopFollower();
+    const r = item.getBoundingClientRect();
+    const oe = evt.originalEvent || {};
+    const g = item.cloneNode(true);
+    g.classList.remove('sortable-ghost', 'sortable-chosen', 'sortable-drag', 'open', 'closing', 'magnet-move');
+    g.classList.add('drag-follower');
+    g.style.width = r.width + 'px';
+    g.style.height = r.height + 'px';
+    g.style.left = r.left + 'px';
+    g.style.top = r.top + 'px';
+    document.body.appendChild(g);
+    dragFollower = g;
+    dragGrab = {
+      x: typeof oe.clientX === 'number' ? oe.clientX : r.left + r.width / 2,
+      y: typeof oe.clientY === 'number' ? oe.clientY : r.top + r.height / 2,
+      left: r.left,
+      top: r.top,
+    };
+  }
+
+  function stopFollower() {
+    if (dragFollower && dragFollower.parentNode) dragFollower.parentNode.removeChild(dragFollower);
+    dragFollower = null;
+    dragGrab = null;
+  }
+
+  function bindSortable() {
+    if (!window.Sortable || sortables.length) return;
+    [l1Grid, dockGrid].forEach((grid) => {
+      if (!grid) return;
+      const s = new window.Sortable(grid, {
+        group: { name: 'panel-modules', pull: true, put: true },
+        animation: 150,
+        delay: 300,
+        delayOnTouchOnly: false,
+        button: 2,
+        forceFallback: true,
+        fallbackOnBody: true,
+        fallbackTolerance: 3,
+        filter: '.cell.open',
+        ghostClass: 'sortable-ghost',
+        fallbackClass: 'sortable-fallback',
+        chosenClass: 'sortable-chosen',
+        dragClass: 'sortable-drag',
+        onStart: (evt) => {
+          enterEditing();
+          magnetRects = new Map();
+          document.querySelectorAll('.cell[data-module]').forEach((c) => {
+            magnetRects.set(c, c.getBoundingClientRect());
+          });
+          magnetRects.draggedEl = evt.item;
+          startFollower(evt.item, evt);
+          window.addEventListener('pointermove', onDragPointerMove, true);
+        },
+        // 禁止 Sortable 自己改 DOM：原位占位必须死死钉在 A，不许跟着鼠标跑
+        onMove: () => false,
+        onEnd: (evt) => {
+          window.removeEventListener('pointermove', onDragPointerMove, true);
+          const draggedId = evt.item && evt.item.dataset.module;
+          const targetEl = magnetCell;
+          const targetId = targetEl && targetEl.dataset.module;
+          clearMagnet(true);
+          magnetRects = null;
+          stopFollower();
+          if (draggedId && targetId && draggedId !== targetId) {
+            const from = order.indexOf(draggedId);
+            const to = order.indexOf(targetId);
+            if (from >= 0 && to >= 0 && from !== to) {
+              const arr = order.slice();
+              arr[from] = targetId;
+              arr[to] = draggedId;
+              order = arr;
+              document.body.classList.add('cards-done');
+              document.body.classList.remove('cards-in');
+              paintOrder();
+              persistOrder();
+              log('[order] 互换', draggedId, '<->', targetId, JSON.stringify(order));
+            }
+          }
+          justSortedUntil = Date.now() + 450;
+          exitEditing();
+        },
+      });
+      sortables.push(s);
+    });
+    log('[order] SortableJS 已绑定');
+  }
+
+  function setSortableEnabled(on) {
+    sortables.forEach((s) => { try { s.option('disabled', !on); } catch (e) {} });
+  }
+
+  // 编辑态点空白退出；右键菜单在卡片上禁掉，否则系统菜单会打断长按
+  document.addEventListener('click', (e) => {
+    if (!editing) return;
+    if (e.target.closest && e.target.closest('.cell')) return;
+    exitEditing();
+  });
+  document.addEventListener('contextmenu', (e) => {
+    if (e.target.closest && e.target.closest('.cell[data-module]')) e.preventDefault();
+  });
+  window.addEventListener('blur', () => { exitEditing(); });
   // 抽屉动画（2026-10-18 定稿第 5 版）：
   //   · 窗口永远 434、玻璃也永远 434 → 一次 layout / blur 重算都不会发生；
   //   · 动画只碰 clip-path（合成层，实测帧间隔 5~6ms，全程无空档）；
@@ -1033,7 +1375,8 @@ if (KIND === 'panel') {
     }
   }
 
-  // instant=true：不播过渡，直接跳到目标状态（打开面板时主进程强制收起扩展坞用）
+  // instant=true：不播过渡、也不播格子入场动画，直接跳到目标状态
+  // （从工作区缩回时要把扩展区“提前摆好”，不能再等 300ms 的抽屉动画）
   function paintDock(open, instant) {
     const wasOpen = dockOpen;
     dockOpen = !!open;
@@ -1041,6 +1384,8 @@ if (KIND === 'panel') {
     if (instant) {
       clearTimeout(dockTimer);
       document.body.classList.add('dock-instant');
+      document.body.classList.add('dock-noanim');
+      document.body.classList.remove('dock-anim');
       dockEl.classList.toggle('open', dockOpen);
       document.body.classList.toggle('dock-clip', !dockOpen);
       requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -1048,7 +1393,9 @@ if (KIND === 'panel') {
       }));
       dockShape(dockOpen);
     } else {
+      document.body.classList.remove('dock-noanim');
       dockEl.classList.toggle('open', dockOpen);
+      document.body.classList.toggle('dock-anim', dockOpen);
       if (wasOpen !== dockOpen) dockLayout(dockOpen);
     }
   }
@@ -1071,10 +1418,392 @@ if (KIND === 'panel') {
   function emitSettings(patch) {
     settingsListeners.forEach((cb) => { try { cb(patch); } catch (err) { log('settings listener 出错', err.message); } });
   }
-  // 预留：以后要换底图/取色，都在这个函数里加，调用方不用改
+  // ---------- 效率工具（便签 / 待办） ----------
+  // 数据在 main 的 eff.json 里，这里只做渲染；每次增删都重新拉一次快照（数据量很小）。
+  let effData = { notes: [], todos: [], dueCount: 0 };
+  let effTab = 'note';
+
+  function textClip(s, n) {
+    const t = String(s || '').replace(/\s+/g, ' ').trim();
+    const arr = Array.from(t);
+    return arr.length > n ? arr.slice(0, n).join('') + '…' : t;
+  }
+
+  function fmtWhen(v) {
+    if (!v) return '不设时间';
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return '不设时间';
+    const now = new Date();
+    const pad = (x) => String(x).padStart(2, '0');
+    const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    if (sameDay(d, now)) return `今天 ${hm}`;
+    if (sameDay(d, tomorrow)) return `明天 ${hm}`;
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
+  }
+
+  function todoClass(t) {
+    if (t.done) return 'done';
+    if (!t.dueAt) return '';
+    const left = new Date(t.dueAt).getTime() - Date.now();
+    if (left <= 0) return 'overdue';
+    if (left <= 30 * 60 * 1000) return 'soon';
+    return '';
+  }
+
+  // 0 普通 / 1 重要 / 2 次要；优先级只影响同一截止时间下的排序
+  const PRIO_NAME = ['普通', '重要', '次要'];
+  const prioWeight = (p) => (p === 1 ? 0 : (p === 2 ? 2 : 1));
+
+  // 未完成在前 → 截止时间近到远（没设时间排最后）→ 同一时间按优先级 → 创建早的在前；
+  // 已完成沉底、按完成时间倒序
+  function sortTodos(list) {
+    const arr = (list || []).slice();
+    arr.sort((a, b) => {
+      if (!!a.done !== !!b.done) return a.done ? 1 : -1;
+      if (a.done) return (b.doneAt || 0) - (a.doneAt || 0);
+      const ta = a.dueAt ? new Date(a.dueAt).getTime() : Infinity;
+      const tb = b.dueAt ? new Date(b.dueAt).getTime() : Infinity;
+      if (ta !== tb) return ta - tb;
+      const wa = prioWeight(a.prio);
+      const wb = prioWeight(b.prio);
+      if (wa !== wb) return wa - wb;
+      return (a.createdAt || 0) - (b.createdAt || 0);
+    });
+    return arr;
+  }
+
+  // datetime-local 的 value 要本地时间字符串，直接塞时间戳它不认
+  function toLocalInput(v) {
+    const d = v ? new Date(v) : null;
+    if (!d || isNaN(d.getTime())) return '';
+    const pad = (x) => String(x).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function paintEffBadge(n) {
+    const k = Number(n) || 0;
+    if (!eBadge) return;
+    if (k > 0) { eBadge.hidden = false; eBadge.textContent = k > 99 ? '99+' : String(k); }
+    else { eBadge.hidden = true; eBadge.textContent = '0'; }
+  }
+
+  // 置顶的在前 → 其余按更新时间倒序
+  function sortNotes(list) {
+    return (list || []).slice().sort((a, b) => {
+      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+      return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+    });
+  }
+
+  function paintNoteCount(v) {
+    if (!eNoteCount) return;
+    const s = typeof v === 'string' ? v : (eNoteInput ? eNoteInput.value : '');
+    eNoteCount.textContent = s.length + ' / 4000';
+  }
+
+  function renderNotes() {
+    if (!eNoteList) return;
+    const list = sortNotes(effData.notes);
+    if (eNoteEmpty) eNoteEmpty.hidden = list.length > 0;
+    eNoteList.innerHTML = '';
+    list.forEach((it) => {
+      const row = document.createElement('div');
+      row.className = 'e-item note' + (it.pinned ? ' pinned' : '');
+      const pin = document.createElement('button');
+      pin.className = 'pin';
+      pin.title = it.pinned ? '取消置顶' : '置顶';
+      pin.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
+      pin.addEventListener('click', (e) => { e.stopPropagation(); toggleNotePin(it.id); });
+      const txt = document.createElement('span');
+      txt.className = 'txt';
+      txt.textContent = textClip(it.text, 30);
+      txt.title = it.text + '\n（点一下修改）';
+      txt.addEventListener('click', (e) => { e.stopPropagation(); beginEditNote(it, row); });
+      const when = document.createElement('span');
+      when.className = 'when';
+      when.textContent = fmtWhen(it.updatedAt || it.createdAt);
+      const x = document.createElement('button');
+      x.className = 'x';
+      x.textContent = '×';
+      x.title = '删除这条便签';
+      x.addEventListener('click', (e) => { e.stopPropagation(); removeNote(it.id); });
+      row.appendChild(pin); row.appendChild(txt); row.appendChild(when); row.appendChild(x);
+      eNoteList.appendChild(row);
+    });
+  }
+
+  // 点便签正文 → 就地变成输入框（不弹新窗、不离开这一层）
+  function beginEditNote(it, row) {
+    if (!row || row.querySelector('.e-edit')) return;
+    row.classList.add('editing');
+    const area = document.createElement('textarea');
+    area.className = 'e-edit';
+    area.maxLength = 4000;
+    area.value = it.text;
+    const bar = document.createElement('div');
+    bar.className = 'e-editbar';
+    const tip = document.createElement('span');
+    tip.className = 'e-hint';
+    tip.textContent = 'Ctrl+Enter 保存';
+    const cancel = document.createElement('button');
+    cancel.className = 'ghost';
+    cancel.textContent = '取消';
+    const ok = document.createElement('button');
+    ok.className = 'e-btn';
+    ok.textContent = '保存';
+    bar.appendChild(tip); bar.appendChild(cancel); bar.appendChild(ok);
+    row.appendChild(area); row.appendChild(bar);
+    const finish = (save) => {
+      if (!row.isConnected) return;
+      if (!save) { renderNotes(); return; }
+      const v = area.value.trim();
+      // 空内容不落盘（主进程也有一道），只提示，不把原文冲掉
+      if (!v) { tip.textContent = '内容不能为空'; area.focus(); return; }
+      saveNoteText(it.id, v);
+      paintNoteCount();
+    };
+    cancel.addEventListener('click', (e) => { e.stopPropagation(); finish(false); });
+    ok.addEventListener('click', (e) => { e.stopPropagation(); finish(true); });
+    area.addEventListener('input', () => paintNoteCount(area.value));
+    area.addEventListener('click', (e) => e.stopPropagation());
+    area.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finish(true); }
+    });
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
+    paintNoteCount(area.value);
+  }
+
+  async function saveNoteText(id, text) {
+    try { paintEff(await API.effNoteUpdate(id, text)); } catch (e) { log('[eff] 改便签失败', e.message); }
+  }
+
+  async function toggleNotePin(id) {
+    try { paintEff(await API.effNotePin(id)); } catch (e) { log('[eff] 置顶失败', e.message); }
+  }
+
+  function renderTodos() {
+    if (!eTodoList) return;
+    const list = sortTodos(effData.todos);
+    if (eTodoEmpty) eTodoEmpty.hidden = list.length > 0;
+    eTodoList.innerHTML = '';
+    list.forEach((t) => {
+      const row = document.createElement('div');
+      row.className = 'e-item todo ' + todoClass(t) + (t.prio ? ' p' + t.prio : '');
+      const ck = document.createElement('input');
+      ck.type = 'checkbox';
+      ck.className = 'ck';
+      ck.checked = !!t.done;
+      ck.addEventListener('change', (e) => { e.stopPropagation(); toggleTodo(t.id); });
+      const flag = document.createElement('button');
+      flag.className = 'flag' + (t.prio ? ' f' + t.prio : '');
+      flag.title = '优先级：' + PRIO_NAME[t.prio || 0] + '（点一下换）';
+      flag.addEventListener('click', (e) => { e.stopPropagation(); cycleTodoPrio(t); });
+      const txt = document.createElement('span');
+      txt.className = 'txt';
+      txt.textContent = textClip(t.text, 11);
+      txt.title = t.text;
+      const when = document.createElement('button');
+      when.className = 'when';
+      when.textContent = fmtWhen(t.dueAt);
+      when.title = t.dueAt ? '点一下改截止时间' : '点一下设截止时间';
+      when.addEventListener('click', (e) => { e.stopPropagation(); beginEditDue(t, row); });
+      const x = document.createElement('button');
+      x.className = 'x';
+      x.textContent = '×';
+      x.title = '删除这条待办';
+      x.addEventListener('click', (e) => { e.stopPropagation(); removeTodo(t.id); });
+      row.appendChild(ck); row.appendChild(flag); row.appendChild(txt); row.appendChild(when); row.appendChild(x);
+      eTodoList.appendChild(row);
+    });
+  }
+
+  // 点时间 → 行内展开时间编辑器：保存 / 清除 / 取消，改完重新拉快照
+  function beginEditDue(t, row) {
+    if (!row || row.querySelector('.e-timeedit')) return;
+    // 同时只留一个时间编辑器，避免几行一起撑高
+    const open = eTodoList && eTodoList.querySelector('.e-item.todo.editing');
+    if (open && open !== row) {
+      open.classList.remove('editing');
+      const old = open.querySelector('.e-timeedit');
+      if (old) old.remove();
+    }
+    row.classList.add('editing');
+    const wrap = document.createElement('div');
+    wrap.className = 'e-timeedit';
+    const inp = document.createElement('input');
+    inp.type = 'datetime-local';
+    inp.className = 'e-input e-time';
+    inp.value = toLocalInput(t.dueAt);
+    const clear = document.createElement('button');
+    clear.className = 'ghost';
+    clear.textContent = '清除';
+    clear.title = '清掉截止时间';
+    const cancel = document.createElement('button');
+    cancel.className = 'ghost';
+    cancel.textContent = '取消';
+    const ok = document.createElement('button');
+    ok.className = 'e-btn';
+    ok.textContent = '保存';
+    wrap.appendChild(inp); wrap.appendChild(clear); wrap.appendChild(cancel); wrap.appendChild(ok);
+    row.appendChild(wrap);
+    const finish = async (value) => {
+      try { paintEff(await API.effTodoUpdate(t.id, { dueAt: value })); } catch (e) { log('[eff] 改时间失败', e.message); }
+    };
+    const readValue = () => (inp.value ? new Date(inp.value).getTime() : 0);
+    clear.addEventListener('click', (e) => { e.stopPropagation(); finish(0); });
+    cancel.addEventListener('click', (e) => { e.stopPropagation(); renderTodos(); });
+    ok.addEventListener('click', (e) => { e.stopPropagation(); finish(readValue()); });
+    inp.addEventListener('click', (e) => e.stopPropagation());
+    inp.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(readValue()); }
+    });
+    inp.focus();
+  }
+
+  async function cycleTodoPrio(t) {
+    const next = ((Number(t.prio) || 0) + 1) % 3;
+    try { paintEff(await API.effTodoUpdate(t.id, { prio: next })); } catch (e) { log('[eff] 改优先级失败', e.message); }
+  }
+
+  function paintEffTabs() {
+    const isNote = effTab === 'note';
+    if (eTabNote) eTabNote.classList.toggle('is-on', isNote);
+    if (eTabTodo) eTabTodo.classList.toggle('is-on', !isNote);
+    if (ePaneNote) ePaneNote.hidden = !isNote;
+    if (ePaneTodo) ePaneTodo.hidden = isNote;
+    if (eLeadWrap) eLeadWrap.hidden = isNote;
+  }
+
+  function paintEff(st) {
+    effData = {
+      notes: (st && st.notes) || [],
+      todos: (st && st.todos) || [],
+      dueCount: (st && st.dueCount) || 0,
+    };
+    renderNotes();
+    renderTodos();
+    paintEffBadge(effData.dueCount);
+  }
+
+  async function loadEff() {
+    if (!API || !API.effGet) return;
+    try { paintEff(await API.effGet()); } catch (e) { log('[eff] 读取失败', e.message); }
+  }
+
+  async function addNote() {
+    if (!eNoteInput) return;
+    const text = eNoteInput.value.trim();
+    if (!text) { eNoteInput.focus(); return; }
+    try {
+      const st = await API.effNoteAdd(text);
+      eNoteInput.value = '';
+      paintNoteCount();
+      paintEff(st);
+    } catch (e) { log('[eff] 保存便签失败', e.message); }
+  }
+
+  async function removeNote(id) {
+    try { paintEff(await API.effNoteRemove(id)); } catch (e) { log('[eff] 删便签失败', e.message); }
+  }
+
+  async function addTodo() {
+    const text = (eTodoText && eTodoText.value || '').trim();
+    if (!text) { if (eTodoText) eTodoText.focus(); return; }
+    const raw = (eTodoTime && eTodoTime.value) || '';
+    const dueAt = raw ? new Date(raw).getTime() : 0;
+    const prio = Number(eTodoPrio && eTodoPrio.value) || 0;
+    try {
+      const st = await API.effTodoAdd({ text, dueAt, prio });
+      if (eTodoText) eTodoText.value = '';
+      if (eTodoTime) eTodoTime.value = '';
+      if (eTodoPrio) eTodoPrio.value = '0';
+      paintEff(st);
+      if (eTodoText) eTodoText.focus();
+    } catch (e) { log('[eff] 添加待办失败', e.message); }
+  }
+
+  async function toggleTodo(id) {
+    try { paintEff(await API.effTodoToggle(id)); } catch (e) { log('[eff] 勾选待办失败', e.message); }
+  }
+
+  async function removeTodo(id) {
+    try { paintEff(await API.effTodoRemove(id)); } catch (e) { log('[eff] 删待办失败', e.message); }
+  }
+
+  if (eTabNote) eTabNote.addEventListener('click', (e) => { e.stopPropagation(); effTab = 'note'; paintEffTabs(); });
+  if (eTabTodo) eTabTodo.addEventListener('click', (e) => { e.stopPropagation(); effTab = 'todo'; paintEffTabs(); });
+  if (eNoteSave) eNoteSave.addEventListener('click', (e) => { e.stopPropagation(); addNote(); });
+  if (eTodoAdd) eTodoAdd.addEventListener('click', (e) => { e.stopPropagation(); addTodo(); });
+  if (eNoteInput) {
+    eNoteInput.addEventListener('input', paintNoteCount);
+    eNoteInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); addNote(); }
+    });
+    paintNoteCount();
+  }
+  if (eTodoText) {
+    eTodoText.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); addTodo(); }
+    });
+  }
+  if (eLead) {
+    eLead.addEventListener('change', () => {
+      if (API && API.setSettings) API.setSettings({ remindLead: Number(eLead.value) });
+    });
+  }
+  // 提醒方式：改完立刻落盘，下一次到点就按新方式弹
+  if (cNotify) {
+    cNotify.addEventListener('change', () => {
+      if (API && API.setSettings) API.setSettings({ notifyStyle: cNotify.value === 'bubble' ? 'bubble' : 'native' });
+    });
+  }
+  paintEffTabs();
+
+  // 自定义背景：真正给玻璃染色（色相存在 settings.tint，透明度仍然跟“不透明度”滑块联动）
+  function hexToRgb(hex) {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || '').trim());
+    if (!m) return { r: 111, g: 140, b: 255 };
+    return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+  }
+
+  let tint = '#6f8cff';
+
+  function applyTint(hex, on) {
+    const { r, g, b } = hexToRgb(hex);
+    tint = '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+    document.documentElement.style.setProperty('--tint', tint);
+    document.documentElement.style.setProperty('--tint-rgb', `${r}, ${g}, ${b}`);
+    document.body.classList.toggle('has-tint', !!on);
+    // 染色之后，字色要跟着“染出来的底色”走，而不是跟桌面走：
+    // 深色（雾蓝/紫/石墨）→ 白字；浅色（琥珀/绿）→ 深字。
+    if (on) {
+      // 染色是半透明的，最终底色 = 桌面亮度为主 + 一点点色相亮度：
+      // 只按色相算会翻车（深蓝配白字，压在亮网页上却成了浅紫底 + 白字，看不清）。
+      const tintLum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      const base = (typeof lastLuma === 'number') ? lastLuma : 0.5;
+      const eff = base * 0.68 + tintLum * 0.32;
+      document.body.classList.toggle('on-light', eff > 0.58);
+    } else {
+      applyTone(lastLuma);   // 关掉染色，交还给“看背景亮度”的那套
+    }
+    if (tintRow) tintRow.hidden = !on;
+    if (tintCustom) tintCustom.value = tint;
+    document.querySelectorAll('.sw').forEach((el) => {
+      el.classList.toggle('on', String(el.dataset.tint).toLowerCase() === tint);
+    });
+    emitSettings({ tint });
+  }
+
   function applyCustomBackground(on) {
     const live = !!on;
     document.body.classList.toggle('has-custom-bg', live);
+    applyTint(tint, live);
     emitSettings({ customBackground: live });
   }
 
@@ -1082,7 +1811,7 @@ if (KIND === 'panel') {
     const live = !!on;
     if (cCustomBg) cCustomBg.checked = live;
     if (vCustomBg) vCustomBg.textContent = live ? '已开启' : '已关闭';
-    if (tCustomBg) tCustomBg.textContent = live ? '已开启（底图替换还没接）' : '换自己的底图（下一步做取色 / 图片）';
+    if (tCustomBg) tCustomBg.textContent = live ? '已开启（下面挑个颜色）' : '换自己的底图（可自选颜色）';
     applyCustomBackground(live);
   }
 
@@ -1090,14 +1819,37 @@ if (KIND === 'panel') {
     cCustomBg.addEventListener('change', () => {
       const want = cCustomBg.checked;
       paintCustomBg(want);
-      if (API && API.setSettings) API.setSettings({ customBackground: want });
+      if (API && API.setSettings) API.setSettings({ customBackground: want, tint });
     });
   }
 
-  // 先按默认四宫格铺一遍，别等 settings 回来才显示
-  paintSlots();
-  buildSlotSelects();
-  window.__slots = () => JSON.parse(JSON.stringify(slots));   // 调试用
+  // 色板：点一下立刻预览 + 落盘（落盘不代表要等，先应用再存）
+  if (tintRow) {
+    tintRow.addEventListener('click', (e) => {
+      const sw = e.target && e.target.closest ? e.target.closest('.sw') : null;
+      if (!sw) return;
+      const hex = sw.dataset.tint;
+      applyTint(hex, true);
+      if (API && API.setSettings) API.setSettings({ tint: hex, customBackground: true });
+      if (cCustomBg) cCustomBg.checked = true;
+      paintCustomBg(true);
+    });
+  }
+  if (tintCustom) {
+    // input 期间只预览（拖动取色器时实时变色），change 才落盘
+    tintCustom.addEventListener('input', () => applyTint(tintCustom.value, true));
+    tintCustom.addEventListener('change', () => {
+      applyTint(tintCustom.value, true);
+      if (API && API.setSettings) API.setSettings({ tint, customBackground: true });
+      if (cCustomBg) cCustomBg.checked = true;
+      paintCustomBg(true);
+    });
+  }
+
+  // 先按默认顺序铺一遍，别等 settings 回来才显示
+  order = normalizeLocalOrder(null);
+  paintOrder();
+  window.__order = () => order.slice();   // 调试用
 
   btnClose.addEventListener('click', (e) => { e.stopPropagation(); if (API) API.collapse('close-btn'); });
 
@@ -1238,10 +1990,22 @@ if (KIND === 'panel') {
       // （每张卡片自己的时长/曲线、以及卡片之间的错峰都没动。）
       if (state === 'expanded') {
         document.body.classList.remove('cards-in');
+        document.body.classList.remove('cards-done');
         requestAnimationFrame(() => {
           document.documentElement.style.setProperty('--cards-delay', '200ms');
           document.body.classList.add('cards-in');
         });
+        // 入场动画跑完切到静态态：只认 animationend，不用 setTimeout 估时长
+        const firstCard = l1Grid && l1Grid.querySelector('.cell');
+        if (firstCard) {
+          const onCardsIn = (ev) => {
+            if (ev.animationName !== 'cardIn') return;
+            firstCard.removeEventListener('animationend', onCardsIn);
+            document.body.classList.add('cards-done');
+            document.body.classList.remove('cards-in');
+          };
+          firstCard.addEventListener('animationend', onCardsIn);
+        }
       } else if (state === 'collapsing') {
         document.body.classList.remove('cards-in');
       } else if (state === 'collapsed') {
@@ -1266,11 +2030,26 @@ if (KIND === 'panel') {
     // 快捷启动：先拉一次列表，这样第一次展开就有内容
     loadApps();
 
+    // 先把五张卡搭好（每张卡里装它自己的工作区），再按保存的一维顺序摆进主区/扩展区
+    buildCards();
+    applyOrder(null);
+    bindSortable();
+    document.body.classList.add('cards-done');
+
     API.onRequestClose(() => {
+      // 正在输入框里：Esc 只取消焦点，不关面板、不退工作区（用户 2026-10-19 要求）
+      const ae = document.activeElement;
+      const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
+      if (typing) {
+        try { ae.blur(); } catch (e) { }
+        API.closeResult({ handled: true });
+        return;
+      }
       // 先看自己能不能往里退一层
       let handled = false;
       if (settingsOpen) { toggleSettings(false); handled = true; }
-      else if (level === 2) { goLevel(1); handled = true; }
+      else if (editing) { exitEditing(); handled = true; }
+      else if (level === 2) { exitModule(); handled = true; }
       API.closeResult({ handled });
     });
 
@@ -1279,10 +2058,26 @@ if (KIND === 'panel') {
       applyLook(s.opacity, s.blur);
       // 扩展坞永远从收起开始（用户 2026-10-18 定死）：只在用户点箭头后才展开
       paintDock(false, true);
+      // 先定色相，再按开关应用（避免先用默认色闪一下）
+      tint = /^#[0-9a-f]{6}$/i.test(String(s.tint || '')) ? String(s.tint).toLowerCase() : '#6f8cff';
+      applyTint(tint, false);
       paintCustomBg(!!s.customBackground);
-      if (s.slots) applySlots(s.slots);
+      if (eLead) eLead.value = String([0, 5, 10].includes(Number(s.remindLead)) ? Number(s.remindLead) : 0);
+      if (cNotify) cNotify.value = s.notifyStyle === 'bubble' ? 'bubble' : 'native';
+      if (s.order) applyOrder(s.order);
       if (s.features && s.features.dock === false && dockEl) dockEl.hidden = true;
     }).catch(() => {});
+
+    // 效率工具：到点未完成数量（模块格子红点）
+    if (API.onEffState) API.onEffState((p) => { paintEffBadge(p && p.dueCount); });
+    // 点待办通知 → 直接落到「效率工具 / 待办」这一层
+    if (API.onOpenModule) API.onOpenModule((p) => {
+      if (!p || p.module !== 'efficiency') return;
+      effTab = p.tab === 'todo' ? 'todo' : 'note';
+      paintEffTabs();
+      enterModule(null, 'efficiency');
+    });
+    loadEff();
 
     API.info().then((i) => {
       liveInfo = i;

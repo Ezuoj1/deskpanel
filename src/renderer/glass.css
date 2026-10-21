@@ -221,9 +221,9 @@ body.cards-in .l1-grid > :nth-child(4) { animation-delay: calc(var(--cards-delay
   to   { opacity: 1; transform: scale(1); }
 }
 
-.stage[data-level="2"] .l1 { opacity: 0; transform: scale(0.94); pointer-events: none; }
-.stage[data-level="2"] .l2 { opacity: 1; transform: scale(1); pointer-events: auto; }
-.l2 { opacity: 0; transform: scale(0.96); pointer-events: none; }
+.stage[data-level="2"] .l1 { opacity: 0.55; filter: saturate(0.85) brightness(0.9); pointer-events: none; transition: opacity 120ms ease; }
+.stage[data-level="2"] .l2 { opacity: 1; pointer-events: auto; }
+.l2 { opacity: 0; pointer-events: none; }
 
 .cell {
   position: relative;
@@ -289,9 +289,10 @@ body.cards-in .l1-grid > :nth-child(4) { animation-delay: calc(var(--cards-delay
   background: rgba(12, 16, 26, 0.32);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
   transition: transform 300ms cubic-bezier(0.25, 0.8, 0.25, 1), background 160ms ease;
+  transform: translateY(7px);
 }
 .dock-bar:hover .dock-chev { background: rgba(12, 16, 26, 0.5); }
-.dock.open .dock-chev { transform: rotate(180deg); }
+.dock.open .dock-chev { transform: translateY(7px) rotate(180deg); }
 
 /* 扩展区：固定 132px，挂在手柄正下方；不参与流式布局，所以 0 重排。
    窗口 302 高时它在窗外（自然被裁掉），窗口长到 434 就把这 132px 露出来。 */
@@ -324,9 +325,16 @@ body.cards-in .l1-grid > :nth-child(4) { animation-delay: calc(var(--cards-delay
   transform-origin: 50% 55%;
   will-change: transform, opacity;
 }
-.dock.open .dock-grid .cell,
-.dock.open .dock-grid .dock-hint {
+body.dock-anim .dock.open .dock-grid .cell,
+body.dock-anim .dock.open .dock-grid .dock-hint {
   animation: dockCellIn 300ms cubic-bezier(0.22, 0.9, 0.28, 1.12) both;
+}
+/* 瞬间展开（从工作区缩回时）：格子直接是最终样子，不重播入场动画 */
+body.dock-noanim .dock.open .dock-grid .cell,
+body.dock-noanim .dock.open .dock-grid .dock-hint {
+  animation: none !important;
+  opacity: 1;
+  transform: none;
 }
 .dock.open .dock-grid > :nth-child(1) { animation-delay: 330ms; }
 .dock.open .dock-grid > :nth-child(2) { animation-delay: 380ms; }
@@ -991,3 +999,443 @@ body.on-light .hint { color: rgba(13, 18, 27, 0.55); }
 body.on-light .switch .txt { color: rgba(13, 18, 27, 0.62); }
 body.on-light .switch .txt b { color: #0d121b; }
 body.on-light .dock-hint { color: rgba(13, 18, 27, 0.55); }
+
+/* ---------------- 自定义背景色（调色盘） ---------------- */
+/* 打开「自定义背景」后，玻璃的染色层换成用户选的颜色：
+   用 --tint-rgb 动态取色，透明度仍然跟「不透明度」滑块联动（--op）。 */
+body.has-tint .tint {
+  background:
+    radial-gradient(120% 80% at 12% 0%, rgba(var(--tint-rgb), calc(0.18 + var(--op) * 0.34)) 0%, rgba(var(--tint-rgb), 0) 64%),
+    linear-gradient(158deg,
+      rgba(var(--tint-rgb), calc(0.16 + var(--op) * 0.40)) 0%,
+      rgba(var(--tint-rgb), calc(0.26 + var(--op) * 0.44)) 100%);
+}
+
+.tint-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 2px 0 4px;
+}
+.sw {
+  width: 16px; height: 16px; padding: 0; cursor: pointer;
+  border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.38);
+  background: var(--sw, #6f8cff);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.sw:hover { transform: scale(1.12); }
+.sw.on { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85); }
+.sw-custom {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; color: var(--ink-dim, rgba(255, 255, 255, 0.6)); cursor: pointer;
+}
+.sw-custom input[type="color"] {
+  width: 18px; height: 18px; padding: 0; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.38); border-radius: 50%; background: none;
+}
+.sw-custom input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.sw-custom input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 50%; }
+
+/* ---------------- 效率工具（便签 / 待办） ---------------- */
+.mod.eff { display: flex; flex-direction: column; gap: 6px; height: 100%; }
+
+.e-tabs { display: flex; align-items: center; gap: 6px; flex: none; }
+.e-tab {
+  height: 22px; padding: 0 11px; border: 0; border-radius: 8px; cursor: pointer;
+  font: inherit; font-size: 11px;
+  background: var(--chip, rgba(255, 255, 255, 0.10));
+  color: var(--ink-dim, rgba(255, 255, 255, 0.72));
+  transition: background 140ms ease, color 140ms ease;
+}
+.e-tab.is-on { background: var(--chip-hover, rgba(255, 255, 255, 0.20)); color: var(--ink, #fff); }
+.e-sp { flex: 1; }
+.e-lead { display: flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--ink-dim, rgba(255, 255, 255, 0.6)); }
+.e-lead select {
+  height: 20px; padding: 0 3px; border-radius: 6px; font: inherit; font-size: 10.5px;
+  color: inherit; background: var(--chip, rgba(255, 255, 255, 0.10));
+  border: 1px solid var(--card-border, rgba(255, 255, 255, 0.18));
+}
+
+.e-pane { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; }
+
+.e-input {
+  min-width: 0; padding: 6px 8px; border-radius: 9px; outline: none;
+  font: inherit; font-size: 11px;
+  color: var(--ink, #fff); background: var(--chip, rgba(255, 255, 255, 0.10));
+  border: 1px solid var(--card-border, rgba(255, 255, 255, 0.18));
+}
+.e-input::placeholder { color: var(--ink-dim, rgba(255, 255, 255, 0.42)); }
+.e-input:focus {
+  border-color: rgba(var(--tint-rgb, 111, 140, 255), 0.85);
+  box-shadow: 0 0 0 2px rgba(var(--tint-rgb, 111, 140, 255), 0.22);
+}
+.e-area { height: 66px; resize: none; line-height: 1.45; }
+.e-row { display: flex; align-items: center; gap: 8px; flex: none; }
+.e-hint { flex: 1; font-size: 10px; color: var(--ink-dim, rgba(255, 255, 255, 0.48)); }
+
+.e-btn {
+  height: 24px; padding: 0 12px; border: 0; border-radius: 8px; cursor: pointer;
+  font: inherit; font-size: 11px; color: #fff;
+  background: var(--tint, #6f8cff);
+  transition: filter 140ms ease, transform 90ms ease;
+}
+.e-btn:hover { filter: brightness(1.08); }
+.e-btn:active { transform: translateY(1px); }
+
+.e-add { display: flex; align-items: center; gap: 6px; flex: none; }
+.e-line { flex: 1; }
+.e-time { width: 126px; color-scheme: dark; }
+.e-addbtn { width: 28px; padding: 0; font-size: 14px; line-height: 1; }
+
+.e-list {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 5px; padding-right: 2px;
+}
+.e-item {
+  display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 9px;
+  background: var(--card-top, rgba(255, 255, 255, 0.10));
+  border: 1px solid var(--card-border, rgba(255, 255, 255, 0.14));
+}
+.e-item .txt {
+  flex: 1; min-width: 0; font-size: 11px; color: var(--ink, #fff);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.e-item .when { flex: none; font-size: 10px; color: var(--ink-dim, rgba(255, 255, 255, 0.55)); }
+.e-item .x {
+  flex: none; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 5px;
+  cursor: pointer; font-size: 12px; line-height: 1; color: var(--ink-dim, rgba(255, 255, 255, 0.6));
+  background: transparent;
+}
+.e-item .x:hover { background: rgba(255, 107, 107, 0.20); color: #ff8f8f; }
+.e-item .ck {
+  flex: none; width: 13px; height: 13px; margin: 0; cursor: pointer;
+  accent-color: var(--tint, #6f8cff);
+}
+
+/* 快到点：橙色；已过期：红色；已完成：淡出 + 删除线 */
+.e-item.soon .txt, .e-item.soon .when { color: #ffab6b; }
+.e-item.overdue .txt, .e-item.overdue .when { color: #ff7272; }
+.e-item.done { opacity: 0.62; }
+.e-item.done .txt { text-decoration: line-through; }
+
+.e-empty {
+  flex: none; padding: 10px 0; text-align: center;
+  font-size: 10.5px; color: var(--ink-dim, rgba(255, 255, 255, 0.45));
+}
+
+/* 效率工具：覆盖 .mod 的居中布局（默认 align-items:center 会把输入框挤窄） */
+.mod.eff {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 6px;
+  height: 100%;
+  padding: 8px 10px 10px;
+}
+.mod.eff .e-pane { width: 100%; }
+.mod.eff .e-input { width: 100%; box-sizing: border-box; }
+
+/* 效率工具列表：细滚动条（默认那条太抢眼） */
+.e-list::-webkit-scrollbar { width: 4px; }
+.e-list::-webkit-scrollbar-track { background: transparent; }
+.e-list::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: rgba(120, 130, 150, 0.45);
+}
+.e-list:hover::-webkit-scrollbar-thumb { background: rgba(120, 130, 150, 0.62); }
+
+/* ---------------- 便签增强：置顶 / 就地编辑 / 字数 ---------------- */
+.trow select { margin-left: auto; }
+
+.e-count {
+  flex: none; font-size: 10px; font-variant-numeric: tabular-nums;
+  color: var(--ink-dim, rgba(255, 255, 255, 0.48));
+}
+
+.e-item.note .txt { cursor: text; }
+.e-item.note .pin {
+  flex: none; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 5px;
+  display: grid; place-items: center; cursor: pointer;
+  color: var(--ink-dim, rgba(255, 255, 255, 0.5));
+  background: transparent;
+  transition: color 140ms ease, background 140ms ease;
+}
+.e-item.note .pin:hover { background: var(--chip-hover, rgba(255, 255, 255, 0.18)); color: var(--ink, #fff); }
+.e-item.note.pinned {
+  border-color: rgba(var(--tint-rgb, 111, 140, 255), 0.55);
+  background: linear-gradient(180deg, rgba(var(--tint-rgb, 111, 140, 255), 0.16), rgba(var(--tint-rgb, 111, 140, 255), 0.06));
+}
+.e-item.note.pinned .pin { color: var(--tint, #6f8cff); }
+
+/* 编辑态：整行竖过来，正文换成 textarea */
+.e-item.note.editing { flex-direction: column; align-items: stretch; gap: 6px; }
+.e-item.note.editing .txt,
+.e-item.note.editing .when { display: none; }
+.e-edit {
+  width: 100%; box-sizing: border-box; height: 72px; resize: none;
+  padding: 6px 8px; border-radius: 8px; outline: none;
+  font: inherit; font-size: 11px; line-height: 1.45;
+  color: var(--ink, #fff); background: var(--chip, rgba(255, 255, 255, 0.10));
+  border: 1px solid rgba(var(--tint-rgb, 111, 140, 255), 0.8);
+  box-shadow: 0 0 0 2px rgba(var(--tint-rgb, 111, 140, 255), 0.18);
+}
+.e-editbar { display: flex; align-items: center; gap: 6px; }
+.e-editbar .e-hint { flex: 1; font-size: 9.5px; }
+.e-editbar .e-btn { height: 22px; padding: 0 10px; font-size: 10.5px; }
+.e-editbar .ghost {
+  height: 22px; padding: 0 10px; border: 0; border-radius: 8px; cursor: pointer;
+  font: inherit; font-size: 10.5px; color: var(--ink-dim, rgba(255, 255, 255, 0.72));
+  background: var(--chip, rgba(255, 255, 255, 0.10));
+}
+.e-editbar .ghost:hover { background: var(--chip-hover, rgba(255, 255, 255, 0.18)); color: var(--ink, #fff); }
+.e-item.note.editing .pin,
+.e-item.note.editing .x { display: none; }
+
+/* ---------------- 待办增强：优先级 / 改时间 ---------------- */
+.e-add-todo { flex-direction: column; align-items: stretch; gap: 5px; }
+.e-add-row { display: flex; align-items: center; gap: 6px; }
+.e-add-row .e-time { width: auto; flex: 1; min-width: 0; }
+.e-add-row .e-prio { width: 62px; flex: none; padding: 0 4px; color-scheme: dark; }
+.e-add-row .e-prio option { color: #111; background: #fff; }
+
+.e-item.todo .flag {
+  flex: none; width: 12px; height: 16px; padding: 0; border: 0; border-radius: 4px;
+  background: transparent; cursor: pointer; position: relative;
+  color: var(--ink-dim, rgba(255, 255, 255, 0.5));
+}
+.e-item.todo .flag::before {
+  content: ''; position: absolute; left: 4px; top: 6px;
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor; opacity: 0.55;
+}
+.e-item.todo .flag:hover { background: var(--chip-hover, rgba(255, 255, 255, 0.16)); }
+.e-item.todo .flag.f1 { color: #ff7a7a; }
+.e-item.todo .flag.f1::before { width: 4px; height: 9px; top: 4px; left: 5px; border-radius: 2px; opacity: 1; }
+.e-item.todo .flag.f2::before { width: 4px; height: 4px; opacity: 0.32; }
+.e-item.p1 { border-left-color: rgba(255, 114, 114, 0.7); }
+.e-item.p2 { opacity: 0.82; }
+.e-item.p2 .txt { color: var(--ink-dim, rgba(255, 255, 255, 0.62)); }
+.e-item.done.p2 { opacity: 0.5; }
+
+.e-item .when {
+  flex: none; padding: 2px 4px; border: 0; border-radius: 6px; cursor: pointer;
+  font: inherit; font-size: 10px; color: var(--ink-dim, rgba(255, 255, 255, 0.55));
+  background: transparent;
+}
+.e-item .when:hover { background: var(--chip-hover, rgba(255, 255, 255, 0.16)); color: var(--ink, #fff); }
+
+.e-item.todo.editing { flex-wrap: wrap; }
+.e-item.todo.editing .when { display: none; }
+.e-timeedit {
+  display: flex; align-items: center; gap: 6px;
+  flex-basis: 100%; width: 100%; margin-top: 2px;
+}
+.e-timeedit .e-time { flex: 1; width: auto; min-width: 0; height: 26px; }
+.e-timeedit .e-btn { height: 24px; padding: 0 10px; font-size: 10.5px; }
+.e-timeedit .ghost {
+  height: 24px; padding: 0 9px; border: 0; border-radius: 8px; cursor: pointer;
+  font: inherit; font-size: 10.5px; color: var(--ink-dim, rgba(255, 255, 255, 0.72));
+  background: var(--chip, rgba(255, 255, 255, 0.10));
+}
+.e-timeedit .ghost:hover { background: var(--chip-hover, rgba(255, 255, 255, 0.18)); color: var(--ink, #fff); }
+
+/* 新增待办那一行：.mod.eff .e-input 的 width:100% 优先级更高，这里把三个控件压回一条线 */
+.mod.eff .e-add-row .e-input { width: auto; }
+.mod.eff .e-add-row .e-time { flex: 1 1 auto; width: auto; min-width: 0; }
+.mod.eff .e-add-row .e-prio { flex: 0 0 62px; width: 62px; }
+.mod.eff .e-add-row .e-addbtn { flex: 0 0 28px; width: 28px; }
+
+/* ================= 全局字体：思源宋体 / Noto Serif SC（本地 woff2，离线可用） =================
+   文件放在 src\renderer\fonts\，由 index.html 同目录加载；不走网络。
+   latin 子集单独限 unicode-range，避免它抢走中文的字符匹配。 */
+@font-face {
+  font-family: 'Noto Serif SC';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/noto-serif-sc-latin-400-normal.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Noto Serif SC';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/noto-serif-sc-chinese-simplified-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Serif SC';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/noto-serif-sc-latin-700-normal.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Noto Serif SC';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/noto-serif-sc-chinese-simplified-700-normal.woff2') format('woff2');
+}
+
+/* 全控制台统一思源宋体 + 消除透明窗下的毛边 */
+:root {
+  --font-ui: "Noto Serif SC", "Source Han Serif SC", "Source Han Serif CN", "SimSun", serif;
+}
+html, body {
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+button, input, textarea, select {
+  font-family: inherit;
+}
+
+/* ---- 工作区放大/缩回：FLIP（app.js 用 inline transform 精确算卡片矩形） ---- */
+.l1, .l2 { transform-origin: 0 0; }
+.l2 { will-change: transform, opacity; }
+/* 退出时四宫格晚 150ms 再淡入：先让缩回的层独占视线，避免两层文字叠在一起 */
+.stage.exiting .l1 { opacity: 1; pointer-events: none; transition: none; }
+/* 缩回途中大段文字提前退场：120ms 后再淡出，实体白底继续飞回卡片 */
+.l2.shrinking .mod > * { opacity: 0; transition: opacity 140ms ease; }
+/* ===================================================================
+   2026-10-19 21:30 · 设置面板文字锐利化（小泽 m00916）
+   1) 去掉所有继承/声明的 text-shadow：白描边+1px 偏移在小字号上就是重影；
+   2) 设置面板自带深色底，所以它必须用自己的亮色 token，不能再继承 body.on-light
+      的深色 --ink/--ink-dim（否则深字压深底，直接“看不见”）；
+   3) 面板底色改成实色渐变，不再用 rgba 半透明，避免背后卡片文字透出来叠影。
+   =================================================================== */
+.content, .content *, body.on-light .content, body.on-light .content * {
+  text-shadow: none;
+}
+
+.settings {
+  --ink: #f2f5fa;
+  --ink-dim: rgba(242, 246, 252, 0.82);
+  color: var(--ink);
+  background: linear-gradient(160deg, #1b2230, #10151f);
+}
+.settings .rname,
+.settings .rval,
+.settings .tstate { color: var(--ink-dim); }
+.settings .rval { color: #ffffff; }
+
+/* ---------------- 右键长按拖拽（换顺序） ---------------- */
+.cell.dragging {
+  position: relative;
+  z-index: 8;
+  transition: none !important;
+  cursor: grabbing;
+  box-shadow: 0 18px 36px rgba(6, 10, 18, 0.38);
+}
+.cell.drop-target { outline: 2px solid var(--tint); outline-offset: -2px; }
+body.dragging-card, body.dragging-card * { cursor: grabbing !important; user-select: none; }
+/* 入场动画跑完后的静态态：卡片保持可见，重排新建的格子也不再播一遍入场 */
+body.cards-done .l1-grid .cell {
+  opacity: 1;
+  transform: none;
+  animation: none;
+}
+
+/* ===================================================================
+   v3 · 卡片即工作区 + iOS 抖动拖拽（2026-10-19 晚重写）
+   =================================================================== */
+.cell { overflow: hidden; }
+.cell > .tile {
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 3px; width: 100%; height: 100%;
+}
+.cell > .work { display: none; }
+
+/* 打开：还是这一张卡，铺满舞台。里面的 .work 就是它自己的工作区 */
+.cell.open {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+  padding: 0; border: 0; border-radius: 16px;
+  background: transparent; box-shadow: none;
+  overflow: hidden; z-index: 20; cursor: default;
+  will-change: transform;
+}
+.cell.open:hover { background: transparent; }
+.cell.open:active { transform: none; }
+.cell.open > .tile { display: none; }
+.cell.open > .work { display: block; position: absolute; inset: 0; }
+.cell.open .mod { width: 100%; height: 100%; border-radius: 16px; box-sizing: border-box; }
+
+/* 缩回时占住原来格子位置的“空位”，不可见、不可点 */
+.cell-ghost {
+  visibility: hidden; pointer-events: none;
+  height: 91px; border: 0; background: none;
+}
+
+/* 编辑态：所有卡片抖起来；被拎起来的那张停抖 */
+body.editing .cell .tile {
+  animation: jiggle 220ms ease-in-out infinite;
+  animation-delay: var(--jd, 0ms);
+  will-change: transform;
+}
+body.editing .cell.dragging .tile { animation: none; }
+body.editing .cell { cursor: grab; }
+.cell.dragging {
+  z-index: 30; cursor: grabbing;
+  transition: none;
+}
+.cell.swap-target {
+  outline: 2px solid rgba(111, 140, 255, 0.95);
+  outline-offset: -2px;
+}
+@keyframes jiggle {
+  0%, 100% { transform: rotate(-0.7deg) translateX(-0.5px); }
+  50%      { transform: rotate(0.7deg) translateX(0.5px); }
+}
+body.module-open .dock { opacity: 0; pointer-events: none; }
+/* 拖拽时的悬停目标圈：浮在最上层，不被拎起的卡片盖住 */
+.drop-ring {
+  position: fixed; z-index: 60; pointer-events: none;
+  border: 2px solid rgba(111, 140, 255, 0.95);
+  border-radius: 16px;
+  box-shadow: 0 0 0 4px rgba(111, 140, 255, 0.18);
+}
+/* SortableJS：被拎起的卡停抖、幽灵位/拖拽态 */
+body.editing .cell.sortable-chosen .tile { animation: none; }
+body.editing .cell.sortable-chosen { z-index: 40; }
+/* 原位占位：纯白虚线空框，里面不留任何内容 */
+body.editing .cell.sortable-ghost {
+  opacity: 1 !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  border: 2px dashed rgba(111, 140, 255, 0.55) !important;
+  box-shadow: none !important;
+}
+body.editing .cell.sortable-ghost .tile { opacity: 0 !important; animation: none !important; }
+body.editing .cell.sortable-ghost .work { display: none !important; }
+
+/* 跟手实体：就是被拎起的那张卡本身（实体白底），永远压在最上层 */
+body.editing .cell.sortable-fallback {
+  opacity: 1 !important;
+  z-index: 9999 !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(13, 20, 32, 0.14) !important;
+  box-shadow: 0 22px 44px rgba(6, 10, 18, 0.30) !important;
+  scale: 1;
+}
+body.editing .cell.sortable-fallback .tile { animation: none !important; }
+/* 缩回：内容先淡出（到 80% 前全透明），落位后同帧切回卡片 */
+.cell.closing { pointer-events: none; }
+.cell.closing .work { opacity: 0; transition: opacity 200ms ease 40ms; }
+.cell.closing .tile { opacity: 0; transition: opacity 120ms ease; }
+/* 磁吸目标：飞到拖拽卡原来的坑位，飞的时候停抖、压在占位符上面 */
+.cell.magnet-move { z-index: 45; }
+.cell.magnet-move .tile { animation: none !important; }
+/* 跟手实体：完整卡片外观、fixed 咬住光标；Sortable 自带 clone 只用于内部计算，藏掉 */
+body.editing .cell.sortable-fallback { opacity: 0 !important; pointer-events: none !important; }
+.drag-follower {
+  position: fixed; z-index: 9999; pointer-events: none;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid rgba(13, 20, 32, 0.14);
+  border-radius: 16px;
+  box-shadow: 0 22px 44px rgba(6, 10, 18, 0.30);
+  overflow: hidden;
+}
+.drag-follower .tile { opacity: 1 !important; animation: none !important; }
+.drag-follower .work { display: none !important; }

@@ -1,7 +1,7 @@
 {
   "name": "deskpanel",
   "productName": "右上角控制台",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Windows 右上角悬浮控制台：快捷启动 / QQ 音乐控制 / Wallpaper Engine 壁纸 / 系统通知",
   "main": "src/main/main.js",
   "license": "MIT",
@@ -34,5 +34,8 @@
   },
   "devDependencies": {
     "electron": "^31.7.7"
+  },
+  "dependencies": {
+    "sortablejs": "^1.15.7"
   }
 }

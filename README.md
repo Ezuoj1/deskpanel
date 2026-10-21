@@ -8,9 +8,11 @@
 ![lang](https://img.shields.io/badge/语言-简体中文-red)
 
 > **只支持 Windows。** 不需要是 Windows 11——**Windows 10（1809 及以上）也能跑**（见 [支持的系统](#支持的系统)）。
-> **macOS / Linux 跑不起来**，因为四个模块全靠 Windows 专有接口，没有跨平台替代品。
+> **macOS / Linux 跑不起来**，因为核心模块全靠 Windows 专有接口，没有跨平台替代品。
 
-一个常驻屏幕右上角的玻璃质感控制台，给 Windows 用。按一次快捷键就能拉出四宫格，把最常用的四件事收进来：**快捷启动、QQ 音乐控制、Wallpaper Engine 壁纸、系统通知列表**。
+一个常驻屏幕右上角的玻璃质感控制台，给 Windows 用。按一次快捷键就能拉出四宫格，把最常用的几件事收进来：**快捷启动、QQ 音乐控制、Wallpaper Engine 壁纸、系统通知列表、便签 + 待办**。
+
+五张功能卡按一维顺序排队：前 4 张进主区四宫格，其余自动落到下方抽屉；右键长按卡片可以抖动拖拽、互换位置，顺序会记住。点开一张卡，是这张卡自己长大成工作区，不是另开一层遮罩。
 
 不用切窗口、不用找托盘图标，点一下就能用，点一下就收起。
 
@@ -30,6 +32,8 @@
 - 快捷键 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> 展开 / 收起；收起后是一条窄条，点它也能展开。
 - 点控制台**外面**（桌面、别的软件）立刻整体收起；点**控制台内部但卡片外的空白**退回四宫格（等于按 <kbd>Esc</kbd>）；<kbd>Esc</kbd> 逐级返回。
 - 玻璃质感：背后是实时屏幕画面（不是截图），可调透明度与模糊度；有全屏应用（游戏、视频）时自动隐藏。
+- **卡片即工作区**：点开时是同一张卡片从格子里长大，缩回时原路缩回，没有遮罩层叠在四宫格上。
+- **右键长按换位**：按住任意卡片约 0.3 秒，所有卡片轻微抖动；拖动时原位置变成白色占位框，悬停到另一张卡上，那张卡会自动飞进空位，松手互换并记住顺序。
 - 托盘常驻，可退出。
 
 ### 快捷启动
@@ -55,13 +59,20 @@
 - 有未读时四宫格的通知卡片右上角显示红点数字；点开列表即视为已读。
 - 单条 <kbd>×</kbd> 删除、一键清空；退出软件时清空所有缓存。
 
+### 效率工具（便签 + 待办）
+- **便签**：直接写，<kbd>Ctrl</kbd>+<kbd>Enter</kbd> 保存；点便签就地改，支持置顶、4000 字计数。
+- **待办**：设到期时间、三档优先级（普通 / 重要 / 次要）、勾选完成；点时间可改、点左侧小旗可切优先级，完成后自动沉底。
+- **到点提醒**：提前 0 / 5 / 10 分钟提醒；多条同时到期会合并成一条，点提醒直接跳到待办页。
+- **提醒方式**可选「系统通知」或「应用内气泡」：系统通知会进 Windows 通知中心，专注助手可能静默；气泡固定在桌面右下角，不打断当前操作。
+- 数据只存在本机 `%APPDATA%\右上角控制台\eff.json`；坏档会自动备份成 `eff.broken-*.json` 并从 `.tmp` 恢复。
+
 ---
 
 ## 支持的系统
 
 | 系统 | 能不能用 | 说明 |
 |---|---|---|
-| **Windows 11** | ✅ 可以 | 开发与测试环境（Windows 11 build 26100），四个模块全部实测通过 |
+| **Windows 11** | ✅ 可以 | 开发与测试环境（Windows 11 build 26100），五个模块全部实测通过 |
 | **Windows 10（1809 及以上）** | ✅ 应该可以 | 用到的接口在这个版本都已提供（SMTC 1809+、通知监听 1809+、Core Audio 一直有），但**没有机器实测**；有问题请开 issue |
 | Windows 10（1809 以前） | ❌ 不行 | 缺 `Windows.Media.Control`（SMTC）等接口 |
 | **macOS** | ❌ 不行 | 见下 |
@@ -96,7 +107,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/<your-name>/deskpanel.git
+git clone https://github.com/Ezuoj1/deskpanel.git
 cd deskpanel
 npm install
 npm start
@@ -113,10 +124,13 @@ npm start
 | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> | 展开 / 收起控制台 |
 | 点窄条 | 展开控制台 |
 | 点控制台外面的任意位置 | 整体收起 |
-| 点卡片外的内部空白 / <kbd>Esc</kbd> | 退回四宫格 |
-| 快捷启动里拖动图标 | 调整顺序 |
+| 点卡片外的内部空白 / <kbd>Esc</kbd> | 从工作区退回四宫格 |
+| 点任意功能卡 | 这张卡自己长大成工作区 |
+| **右键长按卡片** 后拖动 | 所有卡片抖动，拖到另一张卡上松手互换位置 |
+| 右键长按后点空白 / <kbd>Esc</kbd> | 退出编辑态，卡片停止抖动 |
+| 快捷启动里拖动图标 | 调整图标顺序 |
 | 悬停图标右上角 <kbd>×</kbd> / 右键 | 删除该条目 |
-| 齿轮图标 | 调透明度、模糊度 |
+| 齿轮图标 | 透明度、模糊、开机自启、自定义背景、提醒方式 |
 
 ## 目录结构
 
@@ -124,12 +138,14 @@ npm start
 deskpanel/
 ├─ src/
 │  ├─ main/
-│  │  ├─ main.js          # 主进程：窗口、托盘、全屏探测、四个模块的 IPC
+│  │  ├─ main.js          # 主进程：窗口、托盘、全屏探测、五个模块的 IPC
 │  │  └─ preload.js       # 暴露给页面的安全 API
 │  └─ renderer/
-│     ├─ index.html       # 页面结构（四宫格 + 四个模块面板）
-│     ├─ app.js           # 交互逻辑
-│     └─ glass.css        # 玻璃拟态样式
+│     ├─ index.html       # 页面结构（四宫格 + 底部抽屉 + 五个工作区）
+│     ├─ app.js           # 交互逻辑（开合动画、抖动拖拽、各模块）
+│     ├─ glass.css        # 玻璃拟态样式
+│     ├─ fonts/           # 思源宋体子集（本地 @font-face，离线可用）
+│     └─ vendor/          # SortableJS（拖拽换位）
 ├─ native/                # 调 Windows 官方接口用的小助手
 │  ├─ smtc-helper.ps1     # SMTC：歌曲信息 / 播放控制 / 音量
 │  ├─ notif-helper.ps1    # 通知监听：UserNotificationListener
@@ -167,6 +183,7 @@ Electron 本身说不了 WinRT，也拿不到 SMTC / 通知中心的数据。所
 | 进度条不能拖 | QQ 音乐不支持 `TryChangePlaybackPosition`，接口返回 `canSeek=false` |
 | 微信消息读不到 | 微信 4.x 不走 Windows 系统通知（Qt 自绘弹窗），`UserNotificationListener` 永远等不到；不注入、不读数据库 |
 | 壁纸模块需要 Wallpaper Engine | 通过它的官方命令行控制；没装就只显示提示 |
+| 系统通知提醒可能被「专注助手」静默 | Windows 的勿扰/专注模式会吞掉 Toast；可在设置里把提醒方式改成「应用内气泡」 |
 | 商店应用（UWP）的图标可能仍是通用图标 | 系统限制；可手动添加 `.lnk` 试试 |
 
 ## 隐私
@@ -188,6 +205,8 @@ node_modules\electron\dist\electron.exe . --panel-debug
 数据文件位置：
 
 - 快捷启动列表：`%APPDATA%\右上角控制台\apps.json`
+- 便签 / 待办：`%APPDATA%\右上角控制台\eff.json`
+- 窗口与外观设置：`%APPDATA%\右上角控制台\settings.json`
 - 音乐 / 通知的中间状态：`%TEMP%\deskpanel-media.json`、`%TEMP%\deskpanel-notif.json`
 
 设计取舍写在 [docs/design.md](docs/design.md)。

@@ -47,6 +47,21 @@ contextBridge.exposeInMainWorld('panel', {
   notifClear: () => ipcRenderer.invoke('notif:clear'),
   onNotifState: (cb) => ipcRenderer.on('notif:state', (_e, payload) => cb(payload)),
 
+  // 效率工具（便签 + 待办）：数据单独存 eff.json，和设置分开
+  effGet: () => ipcRenderer.invoke('eff:get'),
+  effNoteAdd: (text) => ipcRenderer.invoke('eff:note-add', text),
+  effNoteUpdate: (id, text) => ipcRenderer.invoke('eff:note-update', { id, text }),
+  effNotePin: (id) => ipcRenderer.invoke('eff:note-pin', id),
+  effNoteRemove: (id) => ipcRenderer.invoke('eff:note-remove', id),
+  effTodoAdd: (payload) => ipcRenderer.invoke('eff:todo-add', payload),
+  effTodoUpdate: (id, patch) => ipcRenderer.invoke('eff:todo-update', Object.assign({ id }, patch || {})),
+  effTodoToggle: (id) => ipcRenderer.invoke('eff:todo-toggle', id),
+  effTodoRemove: (id) => ipcRenderer.invoke('eff:todo-remove', id),
+  // 到点未完成的数量变了（模块格子上的红点）
+  onEffState: (cb) => ipcRenderer.on('eff:state', (_e, payload) => cb(payload)),
+  // 主进程说“把某个模块打开”（比如点了待办通知）
+  onOpenModule: (cb) => ipcRenderer.on('view:open-module', (_e, payload) => cb(payload)),
+
   // 设置：读数 / 存盘（透明度、模糊半径）
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.send('settings:set', patch || {}),
@@ -56,7 +71,7 @@ contextBridge.exposeInMainWorld('panel', {
   setShape: (open) => ipcRenderer.send('panel:shape', !!open),
   onDock: (cb) => ipcRenderer.on('view:dock', (_e, payload) => cb(payload)),
   // 槽位分配：{ main:[id|null×4], dock:[id…] }
-  slotsSet: (slots) => ipcRenderer.invoke('slots:set', slots),
+  orderSet: (order) => ipcRenderer.invoke('order:set', order),
 
   // 开机自启：读真实状态（含注册表）/ 开关
   loginGet: () => ipcRenderer.invoke('login:get'),
